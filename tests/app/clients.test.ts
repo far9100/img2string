@@ -2,7 +2,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { createGenerateClient, type GenWorker } from "../../src/app/generateClient.ts";
 import { defaultPoolSize, ScorePool } from "../../src/app/orderPool.ts";
+import { evaluateTuning, NEUTRAL_TUNING, type TuneInput } from "../../src/core/autoAdjust.ts";
 import { runGreedy } from "../../src/core/greedy.ts";
+import { MAX_REPEAT } from "../../src/core/project.ts";
 import { circleMask, hexToLinear, type Options } from "../../src/core/stringart.ts";
 import { createGenerateJob } from "../../src/workers/generateJob.ts";
 import type { FromGen, ToGen } from "../../src/workers/protocol.ts";
@@ -119,10 +121,31 @@ describe("the score pool", () => {
     expect(made).toHaveLength(2);
   });
 
+  it("scores settings of the automatic adjustment the same way, and the caller keeps its pictures", async () => {
+    const made: GenWorker[] = [];
+    const pool = new ScorePool(() => { const w = fakeWorker(); made.push(w); return w; }, 2);
+    const tunings = [NEUTRAL_TUNING, { ...NEUTRAL_TUNING, tone: 1 }, { ...NEUTRAL_TUNING, brightness: -0.2 }];
+    const inputs = tunings.map((tuning): TuneInput => ({ options: o, mode: "colour", picture: T, painted: W, invert: false, tuning }));
+    const seen = vi.fn();
+    const tuned = await pool.tune(inputs, seen);
+    expect(made).toHaveLength(2);
+    expect(tuned.map((t) => t!.similarity)).toEqual(inputs.map((input) => evaluateTuning(input, { maxRepeat: MAX_REPEAT }).similarity));
+    expect(new Set(tuned.map((t) => t!.similarity)).size).toBe(3);
+    expect(seen).toHaveBeenCalledTimes(3);
+    expect(seen.mock.calls.map((c) => c[2])).toEqual([1, 2, 3]);
+    // the arrays were copied for the workers, not handed over
+    expect([T.length, W.length]).toEqual([3 * o.res * o.res, o.res * o.res]);
+    // a job that cannot run is null, and the others are still scored
+    const mixed = await pool.tune([inputs[0]!, { ...inputs[1]!, options: { ...o, pins: 8 } }]);
+    expect([mixed[0]!.similarity, mixed[1]]).toEqual([tuned[0]!.similarity, null]);
+    expect(pool.busy()).toBe(false);
+  });
+
   it("stop ends the run with what is there and terminates the workers", async () => {
     const made: ReturnType<typeof fakeWorker>[] = [];
     const pool = new ScorePool(() => { const w = fakeWorker(); made.push(w); return w; }, 1);
     const run = pool.run([...jobs, ...jobs]);
+    expect(pool.busy()).toBe(true);
     pool.stop();
     const scores = await run;
     expect(scores).toEqual([null, null, null, null]);

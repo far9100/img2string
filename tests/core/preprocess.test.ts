@@ -1,10 +1,12 @@
 // src/core/preprocess.ts: the crop onto the working grid, the adjustments of §6.4 and the importance map of §6.5.
 import { describe, expect, it } from "vitest";
 import { gaussianBlur, SRGB_TO_LINEAR } from "../../src/core/image.ts";
-import { adjustTarget, importanceWeights, makeCropper, QUIET_RIM, type Palette, type Source } from "../../src/core/preprocess.ts";
+import { adjustTarget, BLANK_DELTA, blankShare, importanceWeights, makeCropper, MOSTLY_BLANK, QUIET_RIM, referencePicture, type Palette, type Source } from "../../src/core/preprocess.ts";
 import { IDENTITY_CROP, NEUTRAL_ADJUST, type Adjust, type Crop } from "../../src/core/project.ts";
 import { circleMask, hexToLinear, linearToSrgb, srgbToLinear, type RGB } from "../../src/core/stringart.ts";
 import { pictureToGrid } from "../../src/core/strokes.ts";
+import { colourWheel, face, gradient } from "../../src/core/targets.ts";
+import { lineDrawing } from "../helpers/pictures.ts";
 import { mulberry32 } from "../helpers/rng.ts";
 
 type Rgba = [number, number, number, number];
@@ -495,5 +497,43 @@ describe("importanceWeights", () => {
     // the same strokes without the preset differ only where the rim was lowered
     const none = importanceWeights(res, "none", strokes, crop, width, height);
     for (let p = 0; p < res * res; p++) expect(none[p]).toBe(W[p] === 0.2 ? 1 : W[p]);
+  });
+});
+
+describe("the picture a piece is compared with, and how much of it is bare board", () => {
+  const res = 120, mask = circleMask(res), white: RGB = [1, 1, 1];
+  const mono: Palette = { mode: "mono", board: white, threads: [hexToLinear("#111111")] };
+
+  it("the reference is the picture with no adjustment but invert, through the palette", () => {
+    const wheel = colourWheel(res), colour: Palette = { mode: "colour", board: white, threads: [hexToLinear("#111111")] };
+    expect(referencePicture(wheel, res, false, colour)).toEqual(wheel);
+    expect(referencePicture(wheel, res, false, mono)).toEqual(adjustTarget(wheel, res, NEUTRAL_ADJUST, mono));
+    expect(referencePicture(wheel, res, true, mono)).toEqual(adjustTarget(wheel, res, { ...NEUTRAL_ADJUST, invert: true }, mono));
+    // in mono mode it is grey: the palette cannot show the wheel's colours
+    const grey = referencePicture(wheel, res, false, mono);
+    for (let q = 0; q < grey.length; q += 3) expect(Math.abs(grey[q]! - grey[q + 2]!)).toBeLessThan(1e-12);
+  });
+
+  it("a line drawing is mostly bare board, a picture with tones is not", () => {
+    const drawing = blankShare(lineDrawing(res), mask, white);
+    expect(drawing).toBeGreaterThan(0.85);
+    expect(drawing).toBeLessThan(1);
+    expect(drawing).toBeGreaterThan(MOSTLY_BLANK);
+    for (const sample of [face, gradient, colourWheel]) expect(blankShare(referencePicture(sample(res), res, false, mono), mask, white)).toBeLessThan(0.4);
+    // on a black board the same drawing has no bare board at all, and its negative is mostly bare board
+    expect(blankShare(lineDrawing(res), mask, [0, 0, 0])).toBe(0);
+    expect(blankShare(lineDrawing(res).map((v) => 1 - v), mask, [0, 0, 0])).toBeGreaterThan(0.85);
+  });
+
+  it("counts by the weights, and a pixel is bare when its colour is within BLANK_DELTA of the board's", () => {
+    const T = new Float64Array(3 * 4), grey = (L: number) => L ** 3; // OKLab lightness of a grey is the cube root of its luminance
+    [1, grey(1 - BLANK_DELTA + 0.01), grey(1 - BLANK_DELTA - 0.01), 0].forEach((v, p) => T.fill(v, 3 * p, 3 * p + 3));
+    expect(blankShare(T, [1, 1, 1, 1], white)).toBe(0.5);
+    expect(blankShare(T, [1, 0, 1, 1], white)).toBeCloseTo(1 / 3, 12);
+    expect(blankShare(T, [3, 1, 1, 1], white)).toBeCloseTo(4 / 6, 12);
+    expect(blankShare(T, [0, 0, 0, 0], white)).toBe(0);
+    // a tint counts as well as a shade: a clear yellow is not white, however light
+    T.set([1, 1, 0.4], 0);
+    expect(blankShare(T, [1, 0, 0, 0], white)).toBe(0);
   });
 });

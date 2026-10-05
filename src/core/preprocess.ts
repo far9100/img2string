@@ -2,8 +2,8 @@
 // adjustments, and the weights W of §4.5. Pure functions over typed arrays, so the same code runs in a worker
 // and in the Node tests. Targets are linear RGB, 3 values per pixel, row-major (see strokes.ts for coordinates).
 import { gaussianBlur, SRGB_TO_LINEAR } from "./image.ts";
-import type { Adjust, Crop, ImportancePreset, Mode, Stroke } from "./project.ts";
-import { circleMask, linearToSrgb, srgbToLinear, type RGB } from "./stringart.ts";
+import { NEUTRAL_ADJUST, type Adjust, type Crop, type ImportancePreset, type Mode, type Stroke } from "./project.ts";
+import { circleMask, linearToSrgb, oklab, srgbToLinear, type RGB } from "./stringart.ts";
 import { cropTransform, paintStrokes } from "./strokes.ts";
 
 /** A decoded picture: sRGB bytes with straight alpha, 4 per pixel, row 0 at the top. */
@@ -183,6 +183,39 @@ export function adjustTarget(target: Float64Array, res: number, adjust: Adjust, 
     for (let q = 0; q < out.length; q += 3) for (let c = 0; c < 3; c++) out[q + c] = board[c]! + rangeCompression * (out[q + c]! - board[c]!);
   }
   return out;
+}
+
+/**
+ * The picture a piece is compared with (similarity.ts, D-54): the cropped picture with no adjustment, as the
+ * palette can show it (mono mode lays it on the palette's lightness axis, D-32). Invert stays, because with it
+ * the user chose which picture they want; everything else the sliders do is a means, not the goal.
+ */
+export function referencePicture(picture: Float64Array, res: number, invert: boolean, palette: Palette): Float64Array {
+  return adjustTarget(picture, res, { ...NEUTRAL_ADJUST, invert }, palette);
+}
+
+/** A pixel is as good as bare board when its OKLab colour is within this of the board's. */
+export const BLANK_DELTA = 0.1;
+/** A picture with more than this share of bare board is mostly empty, like a line drawing: every one of the
+ * 81 test drawings has 68 % or more, the three built-in samples a third or less (D-53). */
+export const MOSTLY_BLANK = 0.6;
+
+/**
+ * The share of a picture, counted by `weight`, that is like the bare board. Lines drawn there can only take
+ * the piece away from the picture, and every line crosses the whole circle: the more of the picture is blank,
+ * the less of it one thread can show (D-53).
+ */
+export function blankShare(picture: Float64Array, weight: ArrayLike<number>, board: Readonly<RGB>): number {
+  const base = oklab(board[0], board[1], board[2]);
+  let blank = 0, total = 0;
+  for (let p = 0; p < weight.length; p++) {
+    const w = weight[p]!;
+    if (!(w > 0)) continue;
+    const c = oklab(picture[3 * p]!, picture[3 * p + 1]!, picture[3 * p + 2]!);
+    total += w;
+    if (Math.hypot(c[0] - base[0], c[1] - base[1], c[2] - base[2]) < BLANK_DELTA) blank += w;
+  }
+  return total > 0 ? blank / total : 0;
 }
 
 /** The "quiet rim" preset of §6.5 (D-14): this weight where the distance from the centre is above this share of the radius. */

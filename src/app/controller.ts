@@ -1,5 +1,6 @@
 // Actions and effects of the page: the store and the workers are owned here; the panels only call methods and
 // read state (after img2shadow's and img2fold's controllers).
+import { autoAdjust, tuningOf, tuningProxy, withTuning, type TuneInput } from "../core/autoAdjust.ts";
 import { replayModel } from "../core/greedy.ts";
 import { hueName } from "../core/gamut.ts";
 import { toRgba8 } from "../core/image.ts";
@@ -19,11 +20,11 @@ import { FILE, stemOf } from "../export/names.ts";
 import { encodePng } from "../export/png.ts";
 import { getLang, t, type Vars } from "../i18n/translate.ts";
 import { buildPlan, clampPosition, planKey, progressStorageKey } from "../player/player.ts";
-import type { TargetRequest } from "../workers/protocol.ts";
+import type { CropRequest, TargetRequest } from "../workers/protocol.ts";
 import { createGenerateClient, GenerateError, generateWorker, type Finished } from "./generateClient.ts";
 import { dataUrlToBlob, decodePicture, readAsDataUrl, sha256, SMALL_SIDE } from "./imageClient.ts";
 import { defaultPoolSize, ScorePool, type ScoreJob } from "./orderPool.ts";
-import { initialState, type AppState, type OrderScore, type ResultView } from "./state.ts";
+import { initialState, type AppState, type OrderScore, type ResultView, type TuneState } from "./state.ts";
 import { createStore, type Path, type Store } from "./store.ts";
 import { addToShelf, loadShelf, removeFromShelf, storeShelf } from "./threadShelf.ts";
 import { createExportClient, createPreprocessClient, createRenderClient, type RenderedImage } from "./workerClients.ts";
@@ -44,6 +45,8 @@ export class Controller {
   private targetInFlight = false;
   private targetDirty = false;
   private openTicket = 0;
+  /** Counts the automatic adjustments: one that was stopped must not go on when the next has begun. */
+  private tuneTicket = 0;
 
   get state(): AppState {
     return this.store.get();
@@ -296,6 +299,11 @@ export class Controller {
     };
   }
 
+  /** The picture as it is, at `res`: for the automatic adjustment and the similarity number. */
+  private cropRequest(p: Project, res: number): CropRequest {
+    return { res, crop: p.image.crop, board: hexToLinear(p.board), preset: p.importance.preset, strokes: p.importance.strokes };
+  }
+
   private scheduleTarget(): void {
     const s = this.state;
     if (!s.source || s.pictureMissing) return;
@@ -396,7 +404,7 @@ export class Controller {
     }
     const view: ResultView = {
       res: o.res, rgba, deltaE, reason: result.reason, unstarted: finished?.unstarted ?? [], budgetBlocked: finished?.budgetBlocked ?? [], ms: finished?.ms ?? 0,
-      trueReduction: null, trueDeltaE: null,
+      trueReduction: null, trueDeltaE: null, similarity: null,
     };
     // where the user left off winding this piece (§7.4)
     let step = made.player.step;
@@ -408,13 +416,19 @@ export class Controller {
     this.store.update((x) => ({ ...x, made: { ...made, player: { ...made.player, step: clampPosition(total, step) } }, result: view }));
   }
 
-  /** The error numbers on the true-width render (DECISIONS D-10); needs the target the piece was made from. */
+  /** The error numbers on the true-width render (DECISIONS D-10) and how close it is to the picture before
+   * any adjustment (D-54); needs the target the piece was made from. */
   private measure(made: Project): void {
-    const s = this.state;
-    if (!s.target || s.target.key !== targetKey(made) || !made.result || !made.result.lines.some((n) => n > 0)) return;
-    void this.renderer.measure(toOptions(made), made.result.sequences, s.target.target, s.target.weight).then((m) => {
-      if (!m || this.state.made?.result !== made.result) return;
-      this.store.update((x) => (x.result ? { ...x, result: { ...x.result, trueReduction: m.errorReduction, trueDeltaE: m.deltaE } } : x));
+    const s = this.state, target = s.target, result = made.result;
+    if (!target || target.key !== targetKey(made) || !result || !result.lines.some((n) => n > 0)) return;
+    const o = toOptions(made);
+    void this.pre.cropped(this.cropRequest(made, o.res), "measure").catch(() => null).then((cropped) => {
+      // the unadjusted picture counts only if it is still the picture this piece was made from
+      const original = cropped && this.state.target === target ? { picture: cropped.picture, painted: cropped.painted, mode: made.mode, invert: made.adjust.invert } : null;
+      return this.renderer.measure(o, result.sequences, target.target, target.weight, original);
+    }).then((m) => {
+      if (!m || this.state.made?.result !== result) return;
+      this.store.update((x) => (x.result ? { ...x, result: { ...x.result, trueReduction: m.errorReduction, trueDeltaE: m.deltaE, similarity: m.similarity } } : x));
     }, () => undefined);
   }
 
@@ -429,7 +443,7 @@ export class Controller {
 
   canSearchOrder(): boolean {
     const n = this.state.project.threads.length;
-    return this.canGenerate() && this.state.order.status === "idle" && n >= 2 && n <= ORDER_SEARCH_MAX;
+    return this.canGenerate() && this.state.order.status === "idle" && this.state.tune.status === "idle" && n >= 2 && n <= ORDER_SEARCH_MAX;
   }
 
   async searchOrder(): Promise<void> {
@@ -471,6 +485,67 @@ export class Controller {
   stopOrderSearch(): void {
     if (this.state.order.status !== "running") return;
     this.store.update((x) => ({ ...x, order: { ...x.order, status: "idle" } }));
+    this.pool?.stop();
+  }
+
+  // ---------- the automatic adjustment (DECISIONS D-55)
+
+  canAutoAdjust(): boolean {
+    return this.canGenerate() && this.state.order.status === "idle" && this.state.tune.status === "idle";
+  }
+
+  /**
+   * Sets the adjustment sliders and the automatic emphasis to the values whose piece comes closest to the
+   * picture: a search on a quick set-up, then its best few and the current values at the real settings. The
+   * result is only generated when the user asks for it, like after every other change (D-31).
+   */
+  async autoAdjust(): Promise<void> {
+    const s = this.state;
+    if (!this.canAutoAdjust()) return;
+    const project = s.project, o = toOptions(project), small = tuningProxy(o), quick = small !== o, key = generationKey(project);
+    const ticket = ++this.tuneTicket, alive = () => this.tuneTicket === ticket;
+    const end = (last: TuneState["last"]) => { if (alive()) this.store.update((x) => ({ ...x, tune: { status: "idle", done: 0, total: 0, last } })); };
+    const percent = (v: number) => Math.round(100 * Math.min(1, Math.max(0, v)));
+    this.store.update((x) => ({ ...x, tune: { status: "running", done: 0, total: 0, last: null } }));
+    try {
+      const [real, proxy] = await Promise.all([this.pre.cropped(this.cropRequest(project, o.res), "tune"), quick ? this.pre.cropped(this.cropRequest(project, small.res), "tune-quick") : null]);
+      if (!real || (quick && !proxy) || !alive()) return end(null);
+      const pool = (this.pool ??= new ScorePool(generateWorker, defaultPoolSize(navigator.hardwareConcurrency)));
+      let base = 0;
+      const found = await autoAdjust(project.mode, tuningOf(project), quick, async (jobs) => {
+        if (!alive()) return null;
+        const inputs = jobs.map((job): TuneInput => {
+          const from = job.real ? real : proxy!;
+          return { options: job.real ? o : small, mode: project.mode, picture: from.picture, painted: from.painted, invert: project.adjust.invert, tuning: job.tuning };
+        });
+        const tuned = await pool.tune(inputs, (_index, _tuned, n) => { if (alive()) this.store.update((x) => ({ ...x, tune: { ...x.tune, done: Math.min(x.tune.total, base + n) } })); });
+        return alive() ? tuned.map((t) => (t ? t.similarity : null)) : null;
+      }, (done, total) => {
+        base = done;
+        if (alive()) this.store.update((x) => ({ ...x, tune: { ...x.tune, done, total } }));
+      });
+      if (!found || !alive()) return;
+      const now = this.state.project;
+      if (generationKey(now) !== key) { // the settings changed meanwhile: what was found belongs to the old ones
+        end(null);
+        this.notify("tune.moved");
+        return;
+      }
+      if (found.changed) this.commit(withTuning(now, found.tuning));
+      end({ key: targetKey(this.state.project), before: percent(found.before), after: percent(found.after), changed: found.changed });
+      if (found.changed) this.notify("tune.changed", { before: percent(found.before), after: percent(found.after) });
+      else this.notify("tune.kept", { percent: percent(found.after) });
+    } catch {
+      if (!alive()) return;
+      end(null);
+      this.notify("error.internal", {}, "error");
+    }
+  }
+
+  stopAutoAdjust(): void {
+    if (this.state.tune.status !== "running") return;
+    this.tuneTicket++;
+    this.store.update((x) => ({ ...x, tune: { status: "idle", done: 0, total: 0, last: null } }));
     this.pool?.stop();
   }
 

@@ -26,6 +26,8 @@ export interface TargetView {
   /** Colour mode only (§6.3): which of the picture's colours the palette cannot mix, and those parts hatched. */
   gamut: GamutSummary | null;
   gamutRgba: Uint8ClampedArray | null;
+  /** How much of the picture, before any adjustment, is like the bare board (0..1): mostly, for a line drawing. */
+  blank: number;
 }
 
 export interface RunState {
@@ -51,6 +53,9 @@ export interface ResultView {
   /** Measured on the true-width render (DECISIONS D-10); null until that has run. */
   trueReduction: number | null;
   trueDeltaE: number | null;
+  /** How close the true-width render is to the picture before any adjustment, 0..1 (DECISIONS D-54); null
+   * until that has run, or when the picture is not there. */
+  similarity: number | null;
 }
 
 export interface OrderScore {
@@ -67,6 +72,16 @@ export interface OrderSearch {
   scores: OrderScore[] | null;
   /** Colours (hex) the scores refer to, in the order they had when the search ran. */
   hexes: string[];
+}
+
+/** The automatic adjustment (DECISIONS D-55): its progress, and what the last one found. */
+export interface TuneState {
+  status: "idle" | "running";
+  done: number;
+  total: number;
+  /** The last finished search: the similarity before and after, and targetKey() of the project it left
+   * behind, so the note goes away as soon as a setting it depends on is changed. */
+  last: { key: string; before: number; after: number; changed: boolean } | null;
 }
 
 /** "target": the picture as the generator will see it (crop and brush are edited here); "result": the piece. */
@@ -103,6 +118,7 @@ export interface AppState {
   made: Project | null;
   result: ResultView | null;
   order: OrderSearch;
+  tune: TuneState;
   view: ViewState;
   /** Codes of things to tell the user about the settings ("issue.<code>"). */
   issues: string[];
@@ -122,6 +138,7 @@ export function initialState(): AppState {
     made: null,
     result: null,
     order: { status: "idle", done: 0, total: 0, scores: null, hexes: [] },
+    tune: { status: "idle", done: 0, total: 0, last: null },
     view: { tab: "target", realistic: false, distanceM: 0, compare: "none", magnifier: false, brush: { on: false, weight: 2, radius: 0.05 }, gamut: true, player: false },
     issues: [],
     busyExport: false,

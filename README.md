@@ -35,14 +35,16 @@ on a 500 mm frame, one black thread.*
    Drag the picture to place it inside the pin ring; scroll or pinch to zoom.
 2. Choose the colours: **One colour** or **Several colours**, a palette, the
    board colour and the winding order. Set the frame's diameter, the number
-   of pins and the thread width.
-3. **Generate**. Lines appear while it works; **Stop** keeps what is there,
+   of pins (64 to 512) and the thread width.
+3. Optionally, **Find the settings closest to the picture** sets the
+   adjustment sliders for you.
+4. **Generate**. Lines appear while it works; **Stop** keeps what is there,
    and **Continue** carries on from it.
-4. Look at the result at **True thread width**, from a **Viewing distance**,
+5. Look at the result at **True thread width**, from a **Viewing distance**,
    side by side with the picture, or through the **Magnifier**.
-5. **Download nail template (PDF)**, print it at 100 % and check its 100 mm
+6. **Download nail template (PDF)**, print it at 100 % and check its 100 mm
    bar with a ruler. Tape the pages together, nail through the marks.
-6. **Start winding**: the player shows the next pin in large numerals. Space,
+7. **Start winding**: the player shows the next pin in large numerals. Space,
    Enter or the right arrow moves on; the left arrow goes back. It remembers
    where you stopped.
 
@@ -92,11 +94,27 @@ Three facts explain what comes out:
   doubles the contrast, at about three times the lines and the winding time.
 - With several colours the winding order matters a great deal. **Find the best
   order** tries every order (up to four threads) and takes about ten seconds.
+- **Line drawings are the hardest pictures.** Thin outlines on white are
+  mostly bare board, and a line that draws an outline also crosses the empty
+  parts and greys them. At the settings a picture starts with, the 81 test
+  drawings got 60 to 490 lines (median 212) and no recognisable picture. The
+  automatic adjustment (below) helps, and a white thread wound last helps
+  more, at about five times the lines; the page says so when a picture is
+  mostly blank. More pins do not rescue a line drawing: going from 128 to 256
+  pins matters, beyond 256 it adds little.
 - A piece is hours of work: at 8 seconds per line, 1,450 lines take a little
   over 3 hours.
 
 ### Tools for a better piece
 
+- **Find the settings closest to the picture** sets the sliders under *Adjust
+  the picture* and the two emphases below by trying them: about forty
+  settings, each generated, drawn at true thread width and compared with the
+  picture as it was before any adjustment. It keeps the closest and tells
+  how close. On the face sample the similarity rises from 41 % to 50 %; on
+  twelve test line drawings from 42 % to 56 % (median), and with a white
+  thread wound last to 72 %. It takes ten seconds to a minute, and changes
+  nothing but those sliders.
 - **Can these threads make the picture's colours?** With several colours, the
   page hatches the parts of the picture whose colour the board and the threads
   cannot mix, names the colour that is missing most and offers to add a thread
@@ -127,6 +145,14 @@ Three facts explain what comes out:
   line at its true width. It is a few points lower, and the more honest one.
 - **Mean colour difference ΔE ×100**: the average difference from the picture
   inside the pin ring, in the OKLab colour space; before and after.
+- **Similarity to the picture**: how much the piece at true thread width
+  looks like the picture as it was before any adjustment, from 0 % (the bare
+  board) to 100 % (the picture itself). The other three numbers compare with
+  the adjusted target, point by point; this one compares structure at six
+  scales, from thread texture to the overall tone, and is what the automatic
+  adjustment raises. Use it to compare settings on one picture, not one
+  picture with another: detail finer than about 5 mm scores low in every
+  string piece.
 
 ### Saving
 
@@ -185,11 +211,12 @@ img2string 會算出線要怎麼繞在圓框的釘子上，讓人從正常的觀
 ### 使用方式
 
 1. 按〔上傳圖片〕（也可以把圖拖進頁面或直接貼上），或先試內建範例。拖曳圖片把它擺進釘環，滾輪或雙指可以縮放。
-2. 選顏色：〔單色〕或〔多色〕、調色盤、板子顏色與繞線順序。設定圓框直徑、釘數與線寬。
-3. 按〔生成〕。計算時線條會逐步出現；按〔停止〕會保留目前的結果，按〔繼續〕可以接著算。
-4. 用〔真實線寬〕、〔觀看距離〕、和圖片並排，或用〔放大鏡〕檢查結果。
-5. 按〔下載釘位模板（PDF）〕，以 100% 列印，用尺量一下上面的 100 mm 比例尺。把各頁貼在一起，照記號釘上釘子。
-6. 按〔開始繞線〕：播放器用大字顯示下一個釘號。空白鍵、Enter 或右鍵前進，左鍵後退，它會記住你繞到哪裡。
+2. 選顏色：〔單色〕或〔多色〕、調色盤、板子顏色與繞線順序。設定圓框直徑、釘數（64 到 512）與線寬。
+3. 需要的話，按〔找出最接近原圖的數值〕，讓程式替你設定調整圖片的滑桿。
+4. 按〔生成〕。計算時線條會逐步出現；按〔停止〕會保留目前的結果，按〔繼續〕可以接著算。
+5. 用〔真實線寬〕、〔觀看距離〕、和圖片並排，或用〔放大鏡〕檢查結果。
+6. 按〔下載釘位模板（PDF）〕，以 100% 列印，用尺量一下上面的 100 mm 比例尺。把各頁貼在一起，照記號釘上釘子。
+7. 按〔開始繞線〕：播放器用大字顯示下一個釘號。空白鍵、Enter 或右鍵前進，左鍵後退，它會記住你繞到哪裡。
 
 ### 原理
 
@@ -208,10 +235,12 @@ img2string 把每個線色看成一層不透明、只蓋住每個像素一部分
 - 偏暗、平順、沒有大片很亮區域的圖效果最好。很亮的地方會偏灰，因為每條線都橫越整個圓。
 - 只用一條黑線時，深色細節只能暗到中灰，到不了黑：內建的臉部範例裡，眼睛與頭髮的對比大約只有原圖的四成。調色盤〔白板，先黑線再白線〕會在最後繞一條白線，在圖片亮的地方把黑線蓋掉，對比幾乎加倍，但線數與繞線時間約為三倍。
 - 用好幾個顏色時，繞線順序影響很大。〔找出最佳順序〕會試過所有順序（最多四條線），大約十秒。
+- **線稿是最難的圖。** 白底細線的圖大部分是空白的板子，而畫輪廓的線同時也橫越空白處、把它弄灰。以圖片一開始的設定，81 張測試線稿只繞出 60 到 490 條線（中位數 212），看不出原圖。下面的自動調整有幫助，再加一條最後繞的白線幫助更大，代價是線數約五倍；圖片大部分是空白時，頁面會直接說明。多釘釘子救不了線稿：128 釘到 256 釘差很多，256 釘以上就差不多了。
 - 一件作品要花好幾個小時：以每條線 8 秒計，1,450 條線要三個小時多一點。
 
 ### 讓成品更好的工具
 
+- **找出最接近原圖的數值**：〔調整圖片〕的滑桿和下面兩個「強調」不必自己試。程式會試大約四十組數值，每一組都實際算出繞線結果、以真實線寬畫出來，和「還沒做任何調整的原圖」比較，留下最像的一組，並告訴你有多像。臉部範例的相似度從 41% 升到 50%；十二張測試線稿從 42% 升到 56%（中位數），再加一條最後繞的白線則到 72%。需要十幾秒到一分鐘，而且只會動那些滑桿。
 - **這些線混得出圖片的顏色嗎**：多色時，頁面會在圖片上用斜線標出板子和線混不出來的地方，說出最缺的是哪個顏色，並可以直接加一條那個顏色的線。色環範例配青、洋紅、黃、黑時，約有 60% 的面積混不出來；加一條綠線就降到三分之一。
 - **讓圖片決定線色**：依圖片選出最多六條線，可以從任何顏色裡選，也可以只從你自己的線色清單裡選。
 - **強調輪廓**與**強調深色細節**：由圖片本身決定哪裡比較重要。後者是拿均勻換對比：開到最強時，臉部範例的對比從原圖的四成左右升到六成左右，但淺色的地方會偏灰，線也多用四成五。兩者預設都是關的。
@@ -224,6 +253,7 @@ img2string 把每個線色看成一層不透明、只蓋住每個像素一部分
 - **誤差降低（模型）**：線條消除了「空白板子」與圖片之間多少的差距，以引導生成器的快速模型計算。
 - **誤差降低（真實線寬）**：同一件事，但在每條線都以真實寬度畫出的渲染上量。它會低幾個百分點，也比較誠實。
 - **平均色差 ΔE ×100**：釘環以內與圖片的平均差異，在 OKLab 色彩空間裡量；前後各一個數字。
+- **和原圖的相似度**：以真實線寬畫出來的成品，有多像「還沒做任何調整的原圖」，從 0%（空白的板子）到 100%（原圖自己）。前三個數字是和調整後的目標圖逐點比較；這一個比的是六個尺度上的結構，從線的紋理到整體的明暗，也是自動調整要提高的數字。它適合比較同一張圖的不同設定，不適合拿兩張圖互比：5 mm 以下的細節，任何釘線畫的分數都低。
 
 ### 存檔
 

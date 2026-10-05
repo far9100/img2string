@@ -320,6 +320,7 @@ export function mountStage(root: HTMLElement, ctl: Controller, syncs: Sync[]): v
       if (!running && s.result) {
         if (s.result.deltaE) cards.push(card(t("metric.deltaE"), `${s.result.deltaE[0].toFixed(1)} → ${s.result.deltaE[1].toFixed(1)}`));
         if (s.result.trueReduction !== null) cards.push(card(t("metric.trueReduction"), `${(100 * s.result.trueReduction).toFixed(1)}%`));
+        if (s.result.similarity !== null) cards.push(card(t("metric.similarity"), `${Math.round(100 * Math.min(1, Math.max(0, s.result.similarity)))}%`));
         if (s.result.ms > 0) cards.push(card(t("metric.time"), `${(s.result.ms / 1000).toFixed(1)} s`));
       }
     }

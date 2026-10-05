@@ -2,12 +2,13 @@
 // answer matters (the target while a slider moves, the render while the view changes), a ticket per slot makes
 // older answers resolve to null.
 import type { GamutSummary } from "../core/gamut.ts";
+import type { Mode } from "../core/project.ts";
 import type { Options } from "../core/stringart.ts";
 import type { SampleId } from "../core/targets.ts";
 import type { Region } from "../core/truewidth.ts";
 import type { BuiltFile, ExportInput, ExportKind } from "../export/build.ts";
 import type { FromExport, ToExport } from "../workers/exportProtocol.ts";
-import type { FromPre, FromRender, TargetRequest, ToPre, ToRender } from "../workers/protocol.ts";
+import type { CropRequest, FromPre, FromRender, TargetRequest, ToPre, ToRender } from "../workers/protocol.ts";
 
 type Pending<T> = { resolve: (v: T) => void; reject: (e: Error) => void };
 
@@ -21,6 +22,15 @@ export interface TargetAnswer {
   weightRgba: Uint8ClampedArray;
   gamut: GamutSummary | null;
   gamutRgba: Uint8ClampedArray | null;
+  /** How much of the unadjusted picture is like the bare board, 0..1. */
+  blank: number;
+}
+
+/** The picture through a crop before any adjustment, and the importance map as painted. */
+export interface CroppedPicture {
+  res: number;
+  picture: Float64Array;
+  painted: Float64Array;
 }
 
 export interface PreprocessClient {
@@ -28,6 +38,8 @@ export interface PreprocessClient {
   setSample(sample: SampleId): Promise<void>;
   /** Resolves to null when a newer request of the same slot has been made meanwhile. */
   target(request: TargetRequest, slot?: string): Promise<TargetAnswer | null>;
+  /** The same for the unadjusted picture; its slots are apart from target()'s. */
+  cropped(request: CropRequest, slot: string): Promise<CroppedPicture | null>;
 }
 
 export function createPreprocessClient(): PreprocessClient {
@@ -62,7 +74,14 @@ export function createPreprocessClient(): PreprocessClient {
       tickets.set(slot, ticket);
       const m = await call({ t: "target", id: nextId++, ticket, request });
       if (m.t !== "target" || tickets.get(slot) !== ticket) return null;
-      return { res: m.res, target: m.target, weight: m.weight, rgba: m.rgba, weightRgba: m.weightRgba, gamut: m.gamut, gamutRgba: m.gamutRgba };
+      return { res: m.res, target: m.target, weight: m.weight, rgba: m.rgba, weightRgba: m.weightRgba, gamut: m.gamut, gamutRgba: m.gamutRgba, blank: m.blank };
+    },
+    async cropped(request, slot) {
+      const name = `crop:${slot}`, ticket = (tickets.get(name) ?? 0) + 1;
+      tickets.set(name, ticket);
+      const m = await call({ t: "crop", id: nextId++, ticket, request });
+      if (m.t !== "cropped" || tickets.get(name) !== ticket) return null;
+      return { res: m.res, picture: m.picture, painted: m.painted };
     },
   };
 }
@@ -71,9 +90,18 @@ export function createPreprocessClient(): PreprocessClient {
 
 export interface RenderedImage { width: number; height: number; rgba: Uint8ClampedArray }
 
+/** What a piece is compared with: the unadjusted picture, and how the reference picture is made from it. */
+export interface MeasureOriginal {
+  picture: Float64Array;
+  painted: Float64Array;
+  mode: Mode;
+  invert: boolean;
+}
+
 export interface RenderClient {
   render(slot: string, options: Options, sequences: number[][], width: number, height: number, region: Region | null, sigmaMm: number): Promise<RenderedImage | null>;
-  measure(options: Options, sequences: number[][], target: Float64Array, weight: Float64Array): Promise<{ errorReduction: number; deltaE: number } | null>;
+  /** `similarity` is null when no `original` was given. */
+  measure(options: Options, sequences: number[][], target: Float64Array, weight: Float64Array, original: MeasureOriginal | null): Promise<{ errorReduction: number; deltaE: number; similarity: number | null } | null>;
 }
 
 export function createRenderClient(): RenderClient {
@@ -113,11 +141,13 @@ export function createRenderClient(): RenderClient {
       if (m.t !== "image" || tickets.get(slot) !== ticket) return null;
       return { width: m.width, height: m.height, rgba: m.rgba };
     },
-    async measure(options, sequences, target, weight) {
+    async measure(options, sequences, target, weight, original) {
       const ticket = ticketOf("measure"), t = target.slice(), w = weight.slice();
-      const m = await call({ t: "measure", id: nextId++, ticket, options, sequences, target: t, weight: w }, [t.buffer, w.buffer]);
+      // the page keeps its own arrays: the worker gets copies
+      const from = original && { ...original, picture: original.picture.slice(), painted: original.painted.slice() };
+      const m = await call({ t: "measure", id: nextId++, ticket, options, sequences, target: t, weight: w, original: from }, from ? [t.buffer, w.buffer, from.picture.buffer, from.painted.buffer] : [t.buffer, w.buffer]);
       if (m.t !== "measured" || tickets.get("measure") !== ticket) return null;
-      return { errorReduction: m.errorReduction, deltaE: m.deltaE };
+      return { errorReduction: m.errorReduction, deltaE: m.deltaE, similarity: m.similarity };
     },
   };
 }

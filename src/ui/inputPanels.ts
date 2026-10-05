@@ -2,10 +2,12 @@
 // generation). Every panel is built once; its "sync" closure pushes the state into the controls.
 import type { Controller } from "../app/controller.ts";
 import type { AppState } from "../app/state.ts";
+import { SLIDER, type Tuning } from "../core/autoAdjust.ts";
 import { THREAD_PRESETS } from "../core/calibration.ts";
 import { hueName, type GamutSummary } from "../core/gamut.ts";
 import { ORDER_SEARCH_MAX, PRESETS, presetOf, toHex } from "../core/palette.ts";
-import { IMPORTANCE_PRESETS, isHex, LIMITS, maxMinSkip, maxResolution, NEUTRAL_ADJUST, type Adjust, type ThreadSpec } from "../core/project.ts";
+import { MOSTLY_BLANK } from "../core/preprocess.ts";
+import { IMPORTANCE_PRESETS, isHex, LIMITS, maxMinSkip, maxResolution, NEUTRAL_ADJUST, targetKey, type ThreadSpec } from "../core/project.ts";
 import { SAMPLE_IDS } from "../core/targets.ts";
 import { getLang, t } from "../i18n/i18n.ts";
 import { button, checkField, h, nextId, numberField, rangeField, refreshText, selectField, tx } from "./dom.ts";
@@ -278,15 +280,25 @@ export function mountSettingsPanel(root: HTMLElement, ctl: Controller, syncs: Sy
   });
   const measure = button("calib.open", calibrate);
 
-  const adjust = (key: keyof Adjust, min: number, max: number, step: number, format: (v: number) => string) =>
-    rangeField({ label: `adjust.${key}`, min, max, step, format, onInput: (v) => ctl.set(["adjust", key], v), onCommit: (v) => ctl.set(["adjust", key], v) });
+  // DECISIONS D-55: the sliders of the two groups below, set by trying them
+  const tune = button("tune.go", () => void ctl.autoAdjust(), "primary");
+  const tuneStop = button("tune.stop", () => ctl.stopAutoAdjust());
+  const tuneStatus = h("p", { class: "status", role: "status" });
+  // D-53: a picture that is mostly bare board (a line drawing) needs a thread that clears what the black one greys
+  const blankNote = h("p", { class: "advice" });
+  const addWhite = button("tune.addWhite", () => ctl.applyPreset("mono-black-white"));
+  const blank = h("div", { class: "blank" }, blankNote, h("div", { class: "row wrap" }, addWhite));
+
+  // the sliders the automatic adjustment sets take their ranges from it (SLIDER), so it can never leave them
+  const adjust = (key: Exclude<keyof Tuning, "edges" | "tone">, format: (v: number) => string) =>
+    rangeField({ label: `adjust.${key}`, ...SLIDER[key], format, onInput: (v) => ctl.set(["adjust", key], v), onCommit: (v) => ctl.set(["adjust", key], v) });
   const signed = (v: number) => (v > 0 ? `+${v.toFixed(2)}` : v.toFixed(2));
-  const brightness = adjust("brightness", -0.5, 0.5, 0.01, signed);
-  const contrast = adjust("contrast", -0.5, 1, 0.01, signed);
-  const gamma = adjust("gamma", 0.4, 2.5, 0.01, (v) => v.toFixed(2));
-  const saturation = adjust("saturation", 0, 2, 0.01, (v) => v.toFixed(2));
-  const range = adjust("rangeCompression", 0.3, 1, 0.01, (v) => v.toFixed(2));
-  const unsharp = adjust("unsharp", 0, 1.5, 0.01, (v) => v.toFixed(2));
+  const brightness = adjust("brightness", signed);
+  const contrast = adjust("contrast", signed);
+  const gamma = adjust("gamma", (v) => v.toFixed(2));
+  const saturation = adjust("saturation", (v) => v.toFixed(2));
+  const range = adjust("rangeCompression", (v) => v.toFixed(2));
+  const unsharp = adjust("unsharp", (v) => v.toFixed(2));
   const invert = checkField({ label: "adjust.invert", onChange: (v) => ctl.set(["adjust", "invert"], v) });
   const resetAdjust = button("adjust.reset", () => ctl.set(["adjust"], { ...NEUTRAL_ADJUST }));
 
@@ -304,11 +316,11 @@ export function mountSettingsPanel(root: HTMLElement, ctl: Controller, syncs: Sy
   const clear = button("brush.clear", () => ctl.clearStrokes());
   // §6.5 M2 and §13.5: weight taken from the picture itself
   const edges = rangeField({
-    label: "importance.edges", min: 0, max: 2, step: 0.25, format: (v) => (v === 0 ? t("importance.off") : `+${Math.round(100 * v)}%`),
+    label: "importance.edges", ...SLIDER.edges, format: (v) => (v === 0 ? t("importance.off") : `+${Math.round(100 * v)}%`),
     onCommit: (v) => ctl.set(["importance", "edges"], v),
   });
   const tone = rangeField({
-    label: "importance.tone", min: 0, max: 1, step: 0.05, format: (v) => (v === 0 ? t("importance.off") : `${Math.round(100 * v)}%`),
+    label: "importance.tone", ...SLIDER.tone, format: (v) => (v === 0 ? t("importance.off") : `${Math.round(100 * v)}%`),
     onCommit: (v) => ctl.set(["importance", "tone"], v),
   });
 
@@ -322,6 +334,13 @@ export function mountSettingsPanel(root: HTMLElement, ctl: Controller, syncs: Sy
       h("h3", { "data-i18n": "group.frame", text: t("group.frame") }),
       h("div", { class: "pair" }, D.el, pins.el), h("div", { class: "pair" }, width.el, pinD.el), spacing,
       kind.el, h("div", { class: "row wrap" }, measure),
+    ),
+    h("section", { class: "group tune" },
+      h("h3", { "data-i18n": "group.tune", text: t("group.tune") }),
+      h("div", { class: "row wrap" }, tune, tuneStop),
+      tuneStatus,
+      tx("tune.hint", "hint"),
+      blank,
     ),
     h("details", { class: "group" },
       h("summary", { "data-i18n": "group.adjust", text: t("group.adjust") }),
@@ -348,6 +367,17 @@ export function mountSettingsPanel(root: HTMLElement, ctl: Controller, syncs: Sy
     kind.set(THREAD_PRESETS.find((x) => x.widthMm === p.thread.widthMm)?.id ?? "custom");
     const gap = (Math.PI * p.frame.diameterMm) / p.frame.pins;
     spacing.textContent = t("frame.spacing", { gap: Number(gap.toFixed(1)), place: Number((gap / 2).toFixed(1)) });
+    const tuning = s.tune.status === "running", last = s.tune.last && s.tune.last.key === targetKey(p) ? s.tune.last : null;
+    tune.hidden = tuning;
+    tune.disabled = !ctl.canAutoAdjust();
+    tuneStop.hidden = !tuning;
+    tuneStatus.textContent = tuning ? (s.tune.total ? t("tune.progress", { done: s.tune.done, total: s.tune.total }) : t("run.preparing"))
+      : last ? (last.changed ? t("tune.note", { before: last.before, after: last.after }) : t("tune.kept", { percent: last.after })) : "";
+    tuneStatus.hidden = !tuneStatus.textContent;
+    // of the picture before any adjustment, so the last target's is still right while a slider moves
+    const share = s.target ? s.target.blank : 0;
+    blank.hidden = !(share >= MOSTLY_BLANK && presetOf(p) === "mono-black");
+    if (!blank.hidden) blankNote.textContent = t("tune.blank", { percent: Math.round(100 * share) });
     brightness.set(p.adjust.brightness);
     contrast.set(p.adjust.contrast);
     gamma.set(p.adjust.gamma);

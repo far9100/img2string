@@ -1,11 +1,12 @@
 // The generate worker's job, driven through a fake port: progress, stop, continue, replacing, scoring.
 import { describe, expect, it } from "vitest";
+import { evaluateTuning, NEUTRAL_TUNING, type TuneInput } from "../../src/core/autoAdjust.ts";
 import { runGreedy } from "../../src/core/greedy.ts";
 import { MAX_REPEAT } from "../../src/core/project.ts";
 import { circleMask, hexToLinear, type Options } from "../../src/core/stringart.ts";
 import { createGenerateJob, PROGRESS_EVERY, type JobPort } from "../../src/workers/generateJob.ts";
 import type { FromGen, ToGen } from "../../src/workers/protocol.ts";
-import { blobs, discAndBar } from "../helpers/pictures.ts";
+import { blobs, discAndBar, lineDrawing } from "../helpers/pictures.ts";
 
 const o: Options = {
   res: 90, pins: 64, diameterMm: 500, threadWidthMm: 0.7, board: [1, 1, 1], threads: ["#FFE000", "#00A0E0", "#111111"].map(hexToLinear),
@@ -107,10 +108,23 @@ describe("the generate job", () => {
     expect(h.out.find((m) => m.t === "scored")).toMatchObject({ id: 4, error: done.error });
   });
 
+  it("scores a setting of the sliders by how close its piece comes to the picture (the automatic adjustment)", () => {
+    const h = harness(), mono: Options = { ...o, threads: [[0, 0, 0]], maxLines: [600], allowRepeat: true };
+    const job: TuneInput = { options: mono, mode: "mono", picture: lineDrawing(o.res), painted: W.slice(), invert: false, tuning: { ...NEUTRAL_TUNING, tone: 1, unsharp: 1 } };
+    h.handle({ t: "tune", id: 6, ...job, picture: job.picture.slice(), painted: job.painted.slice() });
+    expect(h.out).toHaveLength(1);
+    // the same run the page would generate with these settings: repeats are held to three here too
+    const tuned = evaluateTuning(job, { maxRepeat: MAX_REPEAT });
+    expect(h.out[0]).toMatchObject({ t: "tuned", id: 6, similarity: tuned.similarity, lines: tuned.lines });
+    expect(tuned.similarity).toBeGreaterThan(0.1);
+    expect(tuned.lines[0]!).toBeGreaterThan(50);
+  });
+
   it("answers invalid settings with an error, not an exception", () => {
     const h = harness();
     h.handle({ t: "start", id: 7, options: { ...o, maxLines: [0, 10, 10] }, target: T.slice(), weight: W.slice(), resume: null, preview: false });
     h.handle({ t: "score", id: 8, options: { ...o, pins: 10 }, target: T.slice(), weight: W.slice() });
-    expect(h.out.map((m) => [m.t, m.id, m.t === "error" ? m.code : ""])).toEqual([["error", 7, "settings"], ["error", 8, "settings"]]);
+    h.handle({ t: "tune", id: 9, options: { ...o, pins: 10 }, mode: "colour", picture: T.slice(), painted: W.slice(), invert: false, tuning: { ...NEUTRAL_TUNING } });
+    expect(h.out.map((m) => [m.t, m.id, m.t === "error" ? m.code : ""])).toEqual([["error", 7, "settings"], ["error", 8, "settings"], ["error", 9, "settings"]]);
   });
 });

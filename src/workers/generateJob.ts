@@ -2,6 +2,7 @@
 // it (a way to post, a way to let queued messages in), so Node tests drive it with a fake port.
 // A run posts progress every 100 lines (§5.2) with the lines added since the last message, yields regularly so
 // a stop can arrive, and always ends with one "done" message that carries the complete sequences.
+import { evaluateTuning } from "../core/autoAdjust.ts";
 import { GreedyRun } from "../core/greedy.ts";
 import { toRgba8 } from "../core/image.ts";
 import { meanDeltaE, meanDeltaEFlat } from "../core/metrics.ts";
@@ -16,8 +17,8 @@ export interface JobPort {
   now(): number;
 }
 
-/** With options.allowRepeat, one thread may use a pin pair up to three times (§3, §13.5); the reference's
- * generate(), which the "reference" job runs, knows no limit. */
+/** With options.allowRepeat, one thread may use a pin pair up to three times (§3, §13.5), also in the runs that
+ * only score an order or a setting; the reference's generate(), which the "reference" job runs, knows no limit. */
 const REPEATS = { maxRepeat: MAX_REPEAT };
 
 /** Lines between two progress messages (§5.2). */
@@ -90,6 +91,16 @@ export function createGenerateJob(port: JobPort): (msg: ToGen) => void {
     }
   }
 
+  function tune(msg: Extract<ToGen, { t: "tune" }>): void {
+    const t0 = port.now();
+    try {
+      const tuned = evaluateTuning(msg, REPEATS);
+      port.post({ t: "tuned", id: msg.id, similarity: tuned.similarity, lines: tuned.lines, ms: port.now() - t0 });
+    } catch (err) {
+      port.post({ t: "error", id: msg.id, code: err instanceof RangeError ? "settings" : "internal", detail: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
   function reference(msg: Extract<ToGen, { t: "reference" }>): void {
     const t0 = port.now();
     try {
@@ -103,6 +114,7 @@ export function createGenerateJob(port: JobPort): (msg: ToGen) => void {
   return (msg) => {
     if (msg.t === "start") void start(msg);
     else if (msg.t === "score") score(msg);
+    else if (msg.t === "tune") tune(msg);
     else if (msg.t === "reference") reference(msg);
     else if (active) active.stop = true; // "stop": the run answers with its "done"
   };

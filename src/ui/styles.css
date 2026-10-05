@@ -330,3 +330,7 @@ dialog.sheet h2 { margin: 0; font-size: 16px; }
 .player-voice { margin-top: 8px; font-size: 13px; }
 .player-voice .field { margin: 0; }
 .player-voice .hint { margin: 0; }
+
+/* ---------- the automatic adjustment (D-55), and its advice for a picture that is mostly bare board (D-53) ---------- */
+.tune .blank { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
+.tune .blank .advice { margin-top: 0; }

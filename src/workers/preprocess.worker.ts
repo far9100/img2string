@@ -1,15 +1,16 @@
 /// <reference lib="webworker" />
 // The preprocess worker: it keeps the opened picture's pixels and turns a crop, the adjustments and the
 // importance settings into the target and the weight map the generator uses (spec §6.2 to §6.5), plus pictures
-// of both for the page and, in colour mode, the gamut check (§6.3). Built-in samples are generated at the
-// working resolution and never cropped, so they stay exact (DECISIONS D-29).
+// of both for the page and, in colour mode, the gamut check (§6.3). It also hands out the cropped picture as
+// it is, for the automatic adjustment and the similarity number (DECISIONS D-54, D-55). Built-in samples are
+// generated at the working resolution and never cropped, so they stay exact (DECISIONS D-29).
 import { emphasizedWeights } from "../core/emphasis.ts";
 import { GAMUT_CLUSTERS, GAMUT_SAMPLES, GAMUT_THRESHOLD, gamutCheck, gamutPicture, summarize, type GamutSummary } from "../core/gamut.ts";
 import { toRgba8 } from "../core/image.ts";
-import { adjustTarget, importanceWeights, makeCropper, type Cropper } from "../core/preprocess.ts";
+import { adjustTarget, blankShare, importanceWeights, makeCropper, referencePicture, type Cropper } from "../core/preprocess.ts";
 import { IDENTITY_CROP } from "../core/project.ts";
 import { sampleTarget, type SampleId } from "../core/targets.ts";
-import type { FromPre, TargetRequest, ToPre } from "./protocol.ts";
+import type { CropRequest, FromPre, TargetRequest, ToPre } from "./protocol.ts";
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -18,15 +19,10 @@ let sample: SampleId | null = null;
 
 const post = (msg: FromPre, transfer: Transferable[] = []) => self.postMessage(msg, transfer);
 
-/** The target, and the weights as painted: the preset and the brush, before any automatic emphasis. */
-function build(r: TargetRequest): { target: Float64Array; painted: Float64Array } {
-  const palette = { mode: r.mode, board: r.board, threads: r.threads };
-  if (picture) {
-    const cropped = picture.crop(r.crop, r.res, r.board);
-    return { target: adjustTarget(cropped, r.res, r.adjust, palette), painted: importanceWeights(r.res, r.preset, r.strokes, r.crop, picture.width, picture.height) };
-  }
-  const id = sample ?? "face";
-  return { target: adjustTarget(sampleTarget(id, r.res), r.res, r.adjust, palette), painted: importanceWeights(r.res, r.preset, r.strokes, IDENTITY_CROP, r.res, r.res) };
+/** The picture through the crop, and the weights as painted: the preset and the brush, before any automatic emphasis. */
+function cropped(r: CropRequest): { picture: Float64Array; painted: Float64Array } {
+  if (picture) return { picture: picture.crop(r.crop, r.res, r.board), painted: importanceWeights(r.res, r.preset, r.strokes, r.crop, picture.width, picture.height) };
+  return { picture: sampleTarget(sample ?? "face", r.res), painted: importanceWeights(r.res, r.preset, r.strokes, IDENTITY_CROP, r.res, r.res) };
 }
 
 /** The weight map as a picture: 0 is transparent, 1 a faint veil, up to 3 strongest (drawn over the target). */
@@ -52,8 +48,13 @@ self.onmessage = (e: MessageEvent<ToPre>) => {
       picture = null;
       sample = msg.sample;
       post({ t: "ready", id: msg.id, width: 0, height: 0 });
+    } else if (msg.t === "crop") {
+      const made = cropped(msg.request);
+      post({ t: "cropped", id: msg.id, ticket: msg.ticket, res: msg.request.res, picture: made.picture, painted: made.painted }, [made.picture.buffer, made.painted.buffer]);
     } else {
-      const r = msg.request, { target, painted } = build(r), px = r.res * r.res;
+      const r: TargetRequest = msg.request, made = cropped(r), painted = made.painted, px = r.res * r.res, palette = { mode: r.mode, board: r.board, threads: r.threads };
+      const target = adjustTarget(made.picture, r.res, r.adjust, palette);
+      const blank = blankShare(referencePicture(made.picture, r.res, r.adjust.invert, palette), painted, r.board);
       const weight = emphasizedWeights(painted, target, r.res, r.edges, r.tone);
       let gamut: GamutSummary | null = null, gamutRgba: Uint8ClampedArray<ArrayBuffer> | null = null;
       if (r.gamut) {
@@ -65,7 +66,7 @@ self.onmessage = (e: MessageEvent<ToPre>) => {
       const rgba = toRgba8(target, px), weightRgba = weightPicture(weight);
       const transfer: Transferable[] = [target.buffer, weight.buffer, rgba.buffer, weightRgba.buffer];
       if (gamutRgba) transfer.push(gamutRgba.buffer);
-      post({ t: "target", id: msg.id, ticket: msg.ticket, res: r.res, target, weight, rgba, weightRgba, gamut, gamutRgba }, transfer);
+      post({ t: "target", id: msg.id, ticket: msg.ticket, res: r.res, target, weight, rgba, weightRgba, gamut, gamutRgba, blank }, transfer);
     }
   } catch (err) {
     post({ t: "error", id: msg.id, code: "internal", detail: err instanceof Error ? err.message : String(err) });

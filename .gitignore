@@ -1,0 +1,22 @@
+# dependencies and build output
+node_modules/
+dist/
+coverage/
+test-results/
+playwright-report/
+blob-report/
+
+# the full-size source font for scripts/subset_font.py (only the subset is kept)
+scripts/.cache/
+
+# kept local, not published: the spec and the working log
+/img2string-spec-en.md
+/docs/progress.md
+
+# tools and OS files
+.claude/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

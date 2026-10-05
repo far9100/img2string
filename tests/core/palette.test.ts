@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { accentFor, applyPreset, contrastRatio, defaultOrder, paletteWarnings, permutations, presetById, presetOf, PRESETS, proxyOptions, reorder, textOn } from "../../src/core/palette.ts";
+import { gamutCheck, paletteCost, summarize } from "../../src/core/gamut.ts";
+import {
+  accentFor, applyPreset, contrastRatio, defaultOrder, freeCandidates, lightness, paletteWarnings, permutations, pickPalette, placeByLightness, presetById, presetOf, PRESETS, proxyOptions, reorder,
+  textOn, toHex,
+} from "../../src/core/palette.ts";
 import { defaultProject, normalizeProject } from "../../src/core/project.ts";
-import { benchmarkOptions, CMYK_HEX } from "../../src/core/benchmarks.ts";
+import { benchmark, benchmarkOptions, CMYK_HEX } from "../../src/core/benchmarks.ts";
+import { hexToLinear } from "../../src/core/stringart.ts";
 
 const name = (key: string) => key.replace("thread.", "");
 
@@ -94,5 +99,53 @@ describe("the winding-order search's set-up", () => {
     const r = reorder(o, [3, 0, 2, 1]);
     expect(r.maxLines).toEqual([4, 1, 3, 2]);
     expect(r.threads).toEqual([o.threads[3], o.threads[0], o.threads[2], o.threads[1]]);
+  });
+});
+
+describe("choosing threads for a picture (§6.3 M2)", () => {
+  const { options: o, target, weight } = benchmark("colour");
+  const gamut = summarize(gamutCheck(target, weight, o.board, o.threads));
+
+  it("writes a colour as hex, and back", () => {
+    for (const hex of ["#000000", "#FFFFFF", "#FFE000", "#00A0E0", "#E0007A", "#111111", "#7A4B2A"]) expect(toHex(hexToLinear(hex))).toBe(hex);
+    expect(toHex([2, -1, 0.5])).toBe("#FF00BC"); // out-of-range values are clamped
+  });
+
+  it("offers the picture's own colours, a near-black and a near-white as free colours", () => {
+    const free = freeCandidates(gamut);
+    expect(free).toHaveLength(gamut.clusters.length + 2);
+    expect(free.slice(-2).map((s) => s.hex)).toEqual(["#111111", "#F2F2F2"]);
+    expect(free[0]!.hex).toBe(toHex(gamut.clusters[0]!.colour)); // the largest group first
+    expect(new Set(free.map((s) => s.hex)).size).toBe(free.length);
+  });
+
+  it("picks the threads that serve the picture best, lightest first", () => {
+    const four = pickPalette(gamut, "#FFFFFF", freeCandidates(gamut), 4);
+    expect(four).toHaveLength(4);
+    expect(four.map((s) => lightness(s.hex))).toEqual(four.map((s) => lightness(s.hex)).sort((a, b) => b - a));
+    // four free colours leave far less of the wheel out of reach than the benchmark's four
+    const after = gamutCheck(target, weight, o.board, four.map((s) => hexToLinear(s.hex)));
+    expect(after.outShare).toBeLessThan(0.5 * gamut.outShare);
+    expect(paletteCost(gamut.clusters, [o.board, ...four.map((s) => hexToLinear(s.hex))])).toBeLessThan(0.3 * paletteCost(gamut.clusters, [o.board, ...o.threads]));
+  });
+
+  it("picks from a list by its names, never the board's colour, never the same colour twice, and stops when nothing helps", () => {
+    const list = [{ name: "paper", hex: "#FFFFFF" }, { name: "leaf", hex: "#1E9E3E" }, { name: "leaf again", hex: "#1E9E3E" }, { name: "sea", hex: "#1F4FD1" }, { name: "rose", hex: "#D7261E" }];
+    const picked = pickPalette(gamut, "#FFFFFF", list, 6);
+    expect(picked.map((s) => s.name).sort()).toEqual(["leaf", "rose", "sea"]);
+    expect(pickPalette(gamut, "#FFFFFF", list, 1)).toHaveLength(1);
+    expect(pickPalette(gamut, "#FFFFFF", [], 4)).toEqual([]);
+    expect(pickPalette(gamut, "#FFFFFF", list, 0)).toEqual([]);
+    // a grey picture wants one dark thread
+    const grey = benchmark("mono"), greys = summarize(gamutCheck(grey.target, grey.weight, grey.options.board, []));
+    expect(pickPalette(greys, "#FFFFFF", [...list, { name: "ink", hex: "#111111" }], 4)[0]).toEqual({ name: "ink", hex: "#111111" });
+  });
+
+  it("puts a new thread where its lightness belongs in the winding order", () => {
+    const cmyk = CMYK_HEX.map((hex) => ({ hex }));
+    expect(placeByLightness(cmyk, "#5EFF52")).toBe(1); // a light green: after yellow, before cyan
+    expect(placeByLightness(cmyk, "#FFFFFF")).toBe(0);
+    expect(placeByLightness(cmyk, "#000000")).toBe(4);
+    expect(placeByLightness([], "#808080")).toBe(0);
   });
 });

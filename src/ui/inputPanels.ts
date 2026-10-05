@@ -2,10 +2,12 @@
 // generation). Every panel is built once; its "sync" closure pushes the state into the controls.
 import type { Controller } from "../app/controller.ts";
 import type { AppState } from "../app/state.ts";
-import { ORDER_SEARCH_MAX, PRESETS, presetOf } from "../core/palette.ts";
+import { THREAD_PRESETS } from "../core/calibration.ts";
+import { hueName, type GamutSummary } from "../core/gamut.ts";
+import { ORDER_SEARCH_MAX, PRESETS, presetOf, toHex } from "../core/palette.ts";
 import { IMPORTANCE_PRESETS, isHex, LIMITS, maxMinSkip, maxResolution, NEUTRAL_ADJUST, type Adjust, type ThreadSpec } from "../core/project.ts";
 import { SAMPLE_IDS } from "../core/targets.ts";
-import { t } from "../i18n/i18n.ts";
+import { getLang, t } from "../i18n/i18n.ts";
 import { button, checkField, h, nextId, numberField, rangeField, refreshText, selectField, tx } from "./dom.ts";
 
 export type Sync = (s: AppState) => void;
@@ -158,6 +160,54 @@ export function mountPalettePanel(root: HTMLElement, ctl: Controller, syncs: Syn
   const orderScores = h("ol", { class: "order-scores" });
   const warnings = h("ul", { class: "issues" });
 
+  // §6.3, colour mode: what the threads cannot mix, the thread that would help most, and choosing threads
+  const gamutStatus = h("p", { class: "gamut-status" });
+  const gamutList = h("ul", { class: "gamut-list" });
+  const addSuggested = button("gamut.add", () => ctl.addSuggestedThread());
+  const showGamut = checkField({ label: "gamut.show", onChange: (v) => ctl.setView({ gamut: v }) });
+  let autoThreads = 4;
+  const autoCount = numberField({ label: "auto.count", min: 1, max: LIMITS.threads, step: 1, onCommit: (v) => { autoThreads = Math.min(LIMITS.threads, Math.max(1, Math.round(v))); autoCount.input.value = String(autoThreads); } });
+  autoCount.set(autoThreads);
+  const autoSource = selectField({ label: "auto.source", options: [{ value: "free", label: "auto.free" }, { value: "shelf", label: "auto.shelf" }], onChange: () => syncGamut(ctl.state) });
+  const autoGo = button("auto.go", () => ctl.autoPalette(autoThreads, autoSource.select.value as "free" | "shelf"));
+  const gamutBox = h("div", { class: "gamut" },
+    h("h4", { "data-i18n": "gamut.title", text: t("gamut.title") }),
+    gamutStatus, gamutList, h("div", { class: "row wrap" }, addSuggested), showGamut.el,
+    h("h4", { "data-i18n": "auto.title", text: t("auto.title") }),
+    h("div", { class: "pair" }, autoCount.el, autoSource.el),
+    h("div", { class: "row wrap" }, autoGo),
+    tx("auto.hint", "hint"),
+  );
+  let gamutShown: GamutSummary | null | undefined, gamutLang = "";
+  const swatch = (hex: string) => {
+    const el = h("span", { class: "swatch", title: hex });
+    el.style.setProperty("background", hex);
+    return el;
+  };
+  const syncGamut = (s: AppState) => {
+    const colour = s.project.mode === "colour", g = colour ? (s.target?.gamut ?? null) : null;
+    gamutBox.hidden = !colour;
+    if (!colour) return;
+    addSuggested.hidden = !g?.suggestion;
+    addSuggested.disabled = !ctl.canAddSuggested();
+    showGamut.set(s.view.gamut);
+    showGamut.el.hidden = !g || g.outShare <= 0;
+    autoGo.disabled = !ctl.canAutoPalette(autoSource.select.value as "free" | "shelf");
+    for (const option of autoSource.select.options) if (option.value === "shelf") option.disabled = !s.shelf.length;
+    if (!s.shelf.length && autoSource.select.value === "shelf") autoSource.set("free");
+    if (gamutShown === g && gamutLang === getLang()) return; // what follows changes only with the check or the language
+    gamutShown = g;
+    gamutLang = getLang();
+    if (!g) { gamutStatus.textContent = t("gamut.wait"); gamutList.replaceChildren(); return; }
+    const hue = g.suggestion ? t(`hue.${hueName(g.suggestion)}`) : "";
+    gamutStatus.textContent = g.suggestion ? t("gamut.out", { percent: Math.round(100 * g.outShare), hue }) : t("gamut.fine");
+    gamutStatus.classList.toggle("warn", !!g.suggestion);
+    if (g.suggestion) addSuggested.textContent = t("gamut.add", { hue, hex: toHex(g.suggestion) });
+    // the largest groups out of reach: the colour wanted, and the nearest one these threads can make
+    gamutList.replaceChildren(...g.clusters.filter((c) => c.out).slice(0, 4).map((c) =>
+      h("li", null, swatch(toHex(c.colour)), h("span", { class: "arrow", "aria-hidden": "true", text: "→" }), swatch(toHex(c.nearest)), h("span", { text: t("gamut.share", { percent: Math.max(1, Math.round(100 * c.share)) }) }))));
+  };
+
   root.append(
     h("section", { class: "group" },
       h("h2", { class: "step" }, h("span", { class: "step-no", text: "2" }), tx("step.settings")),
@@ -171,6 +221,7 @@ export function mountPalettePanel(root: HTMLElement, ctl: Controller, syncs: Syn
       h("div", { class: "row wrap order-tools" }, search, cancel),
       tx("order.hint", "hint"),
       orderStatus, orderScores, warnings,
+      gamutBox,
     ),
   );
 
@@ -207,17 +258,25 @@ export function mountPalettePanel(root: HTMLElement, ctl: Controller, syncs: Syn
     const codes = s.issues.filter((c) => c === "thread-equals-board" || c === "duplicate-thread" || c === "thread-colour" || c === "threads-count");
     warnings.replaceChildren(...codes.map((c) => h("li", { text: t(`issue.${c}`) })));
     warnings.hidden = !codes.length;
+    syncGamut(s);
   });
 }
 
 // ---------- step 2: frame, thread, adjustments, importance, generation settings
 
-export function mountSettingsPanel(root: HTMLElement, ctl: Controller, syncs: Sync[]): void {
+export function mountSettingsPanel(root: HTMLElement, ctl: Controller, syncs: Sync[], calibrate: () => void): void {
   const D = numberField({ label: "frame.diameter", unit: "mm", min: LIMITS.diameterMm[0], max: LIMITS.diameterMm[1], step: 10, onCommit: (v) => ctl.set(["frame", "diameterMm"], v) });
   const pins = numberField({ label: "frame.pins", min: LIMITS.pins[0], max: LIMITS.pins[1], step: 1, onCommit: (v) => ctl.set(["frame", "pins"], v) });
   const pinD = numberField({ label: "frame.pinDiameter", unit: "mm", min: LIMITS.pinDiameterMm[0], max: LIMITS.pinDiameterMm[1], step: 0.1, onCommit: (v) => ctl.set(["frame", "pinDiameterMm"], v) });
   const width = numberField({ label: "thread.width", unit: "mm", min: LIMITS.widthMm[0], max: LIMITS.widthMm[1], step: 0.01, hint: "thread.widthHint", onCommit: (v) => ctl.set(["thread", "widthMm"], v) });
   const spacing = h("p", { class: "stats" });
+  // §6.6: typical widths, or the width measured from a photograph of a test patch
+  const kind = selectField({
+    label: "thread.kind",
+    options: [...THREAD_PRESETS.map((p) => ({ value: p.id, label: `thread.kind.${p.id}` })), { value: "custom", label: "thread.kind.custom" }],
+    onChange: (id) => { const preset = THREAD_PRESETS.find((p) => p.id === id); if (preset) ctl.set(["thread", "widthMm"], preset.widthMm); },
+  });
+  const measure = button("calib.open", calibrate);
 
   const adjust = (key: keyof Adjust, min: number, max: number, step: number, format: (v: number) => string) =>
     rangeField({ label: `adjust.${key}`, min, max, step, format, onInput: (v) => ctl.set(["adjust", key], v), onCommit: (v) => ctl.set(["adjust", key], v) });
@@ -243,15 +302,26 @@ export function mountSettingsPanel(root: HTMLElement, ctl: Controller, syncs: Sy
   });
   const undo = button("brush.undo", () => ctl.undoStroke());
   const clear = button("brush.clear", () => ctl.clearStrokes());
+  // §6.5 M2 and §13.5: weight taken from the picture itself
+  const edges = rangeField({
+    label: "importance.edges", min: 0, max: 2, step: 0.25, format: (v) => (v === 0 ? t("importance.off") : `+${Math.round(100 * v)}%`),
+    onCommit: (v) => ctl.set(["importance", "edges"], v),
+  });
+  const tone = rangeField({
+    label: "importance.tone", min: 0, max: 1, step: 0.05, format: (v) => (v === 0 ? t("importance.off") : `${Math.round(100 * v)}%`),
+    onCommit: (v) => ctl.set(["importance", "tone"], v),
+  });
 
   const res = numberField({ label: "gen.res", unit: "px", min: LIMITS.res[0], max: LIMITS.res[1], step: 10, hint: "gen.resHint", onCommit: (v) => ctl.set(["generator", "res"], v) });
   const skip = numberField({ label: "gen.minSkip", min: 1, max: 255, step: 1, hint: "gen.minSkipHint", onCommit: (v) => ctl.set(["generator", "minSkip"], v) });
+  const repeat = checkField({ label: "gen.repeat", onChange: (v) => ctl.set(["generator", "allowRepeat"], v) });
   const notes = h("ul", { class: "issues" });
 
   root.append(
     h("section", { class: "group" },
       h("h3", { "data-i18n": "group.frame", text: t("group.frame") }),
       h("div", { class: "pair" }, D.el, pins.el), h("div", { class: "pair" }, width.el, pinD.el), spacing,
+      kind.el, h("div", { class: "row wrap" }, measure),
     ),
     h("details", { class: "group" },
       h("summary", { "data-i18n": "group.adjust", text: t("group.adjust") }),
@@ -260,10 +330,12 @@ export function mountSettingsPanel(root: HTMLElement, ctl: Controller, syncs: Sy
     h("details", { class: "group" },
       h("summary", { "data-i18n": "group.importance", text: t("group.importance") }),
       preset.el, tx("importance.hint", "hint"), brushOn.el, brushWeight.el, brushSize.el, h("div", { class: "row wrap" }, undo, clear),
+      h("h4", { "data-i18n": "importance.auto", text: t("importance.auto") }),
+      edges.el, tx("importance.edgesHint", "hint"), tone.el, tx("importance.toneHint", "hint"),
     ),
     h("details", { class: "group" },
       h("summary", { "data-i18n": "group.generator", text: t("group.generator") }),
-      h("div", { class: "pair" }, res.el, skip.el), notes,
+      h("div", { class: "pair" }, res.el, skip.el), repeat.el, tx("gen.repeatHint", "hint"), notes,
     ),
   );
 
@@ -273,6 +345,7 @@ export function mountSettingsPanel(root: HTMLElement, ctl: Controller, syncs: Sy
     pins.set(p.frame.pins);
     pinD.set(p.frame.pinDiameterMm);
     width.set(p.thread.widthMm);
+    kind.set(THREAD_PRESETS.find((x) => x.widthMm === p.thread.widthMm)?.id ?? "custom");
     const gap = (Math.PI * p.frame.diameterMm) / p.frame.pins;
     spacing.textContent = t("frame.spacing", { gap: Number(gap.toFixed(1)), place: Number((gap / 2).toFixed(1)) });
     brightness.set(p.adjust.brightness);
@@ -288,6 +361,9 @@ export function mountSettingsPanel(root: HTMLElement, ctl: Controller, syncs: Sy
     brushWeight.set(s.view.brush.weight);
     brushSize.set(s.view.brush.radius);
     undo.disabled = clear.disabled = !p.importance.strokes.length;
+    edges.set(p.importance.edges);
+    tone.set(p.importance.tone);
+    repeat.set(p.generator.allowRepeat);
     res.set(p.generator.res);
     res.input.max = String(Math.min(LIMITS.res[1], maxResolution(p.frame.diameterMm, p.thread.widthMm)));
     skip.set(p.generator.minSkip);

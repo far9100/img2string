@@ -5,6 +5,7 @@
 import { GreedyRun } from "../core/greedy.ts";
 import { toRgba8 } from "../core/image.ts";
 import { meanDeltaE, meanDeltaEFlat } from "../core/metrics.ts";
+import { MAX_REPEAT } from "../core/project.ts";
 import { circleMask, generate } from "../core/stringart.ts";
 import type { FromGen, ToGen } from "./protocol.ts";
 
@@ -14,6 +15,10 @@ export interface JobPort {
   pause(): Promise<void>;
   now(): number;
 }
+
+/** With options.allowRepeat, one thread may use a pin pair up to three times (§3, §13.5); the reference's
+ * generate(), which the "reference" job runs, knows no limit. */
+const REPEATS = { maxRepeat: MAX_REPEAT };
 
 /** Lines between two progress messages (§5.2). */
 export const PROGRESS_EVERY = 100;
@@ -30,7 +35,7 @@ export function createGenerateJob(port: JobPort): (msg: ToGen) => void {
     active = mine;
     const t0 = port.now();
     try {
-      const run = new GreedyRun(msg.options, msg.target, msg.weight, msg.resume);
+      const run = new GreedyRun(msg.options, msg.target, msg.weight, msg.resume, REPEATS);
       const res = msg.options.res, mask = circleMask(res);
       const sent = run.seq.map((s) => s.length); // what the page already has (the resumed part)
       const tail = (): Int32Array => {
@@ -77,7 +82,7 @@ export function createGenerateJob(port: JobPort): (msg: ToGen) => void {
   function score(msg: Extract<ToGen, { t: "score" }>): void {
     const t0 = port.now();
     try {
-      const run = new GreedyRun(msg.options, msg.target, msg.weight);
+      const run = new GreedyRun(msg.options, msg.target, msg.weight, null, REPEATS);
       while (run.step()) { /* to the end */ }
       port.post({ t: "scored", id: msg.id, error: run.error(), initialError: run.initialError, lines: run.seq.map((s) => Math.max(0, s.length - 1)), ms: port.now() - t0 });
     } catch (err) {

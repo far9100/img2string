@@ -86,7 +86,7 @@ Three facts explain what comes out:
   come out best. Very light areas will look grey, because every line crosses
   the whole circle.
 - With one black thread, dark details reach about mid-grey, not black: on the
-  built-in face the eyes and hair come out at about a third of the picture's
+  built-in face the eyes and hair come out at about 40 % of the picture's
   contrast. The palette **Black, then white, on a white board** winds a white
   thread last, which covers the black where the picture is light; it nearly
   doubles the contrast, at about three times the lines and the winding time.
@@ -94,6 +94,29 @@ Three facts explain what comes out:
   order** tries every order (up to four threads) and takes about ten seconds.
 - A piece is hours of work: at 8 seconds per line, 1,450 lines take a little
   over 3 hours.
+
+### Tools for a better piece
+
+- **Can these threads make the picture's colours?** With several colours, the
+  page hatches the parts of the picture whose colour the board and the threads
+  cannot mix, names the colour that is missing most and offers to add a thread
+  of it. On the colour-wheel sample with cyan, magenta, yellow and black,
+  about 60 % of the picture is out of reach; one green thread brings that
+  down to a third.
+- **Let the picture choose the threads** picks up to six threads for the
+  picture, from any colour or from your own list of thread colours.
+- **Emphasise outlines** and **Emphasise dark detail** take importance from
+  the picture itself. The second trades evenness for contrast: at full
+  strength the face sample's contrast rises from about 40 % to about 60 % of
+  the picture's, while light areas turn greyer and 45 % more thread is used.
+  Both are off unless you turn them on.
+- **Kind of thread** sets a typical width; **Measure it from a photo** works
+  the width out from a photograph of parallel threads next to bare board.
+- **Allow the same pin pair again** lets lines stack up to three times where
+  the picture is very dark. It rarely changes much.
+- In the player, **Read the pin numbers aloud** uses a voice installed on
+  your device, never an online one. Where the device has none, the option is
+  not offered.
 
 ### What the numbers say
 
@@ -123,6 +146,7 @@ Node.js 24 or newer:
 npm ci
 npm run dev             # the page, at the address it prints
 npm test                # unit and acceptance tests, with both benchmarks
+npm run test:slow       # the winding-order search against all 24 orders (2 min)
 npm run e2e             # end-to-end tests in the installed Microsoft Edge
 npm run bench           # the benchmark table
 npm run bench:browser   # the same benchmarks in the browser's worker
@@ -182,9 +206,18 @@ img2string 把每個線色看成一層不透明、只蓋住每個像素一部分
 ### 適合的圖與限制
 
 - 偏暗、平順、沒有大片很亮區域的圖效果最好。很亮的地方會偏灰，因為每條線都橫越整個圓。
-- 只用一條黑線時，深色細節只能暗到中灰，到不了黑：內建的臉部範例裡，眼睛與頭髮的對比大約只有原圖的三分之一。調色盤〔白板，先黑線再白線〕會在最後繞一條白線，在圖片亮的地方把黑線蓋掉，對比幾乎加倍，但線數與繞線時間約為三倍。
+- 只用一條黑線時，深色細節只能暗到中灰，到不了黑：內建的臉部範例裡，眼睛與頭髮的對比大約只有原圖的四成。調色盤〔白板，先黑線再白線〕會在最後繞一條白線，在圖片亮的地方把黑線蓋掉，對比幾乎加倍，但線數與繞線時間約為三倍。
 - 用好幾個顏色時，繞線順序影響很大。〔找出最佳順序〕會試過所有順序（最多四條線），大約十秒。
 - 一件作品要花好幾個小時：以每條線 8 秒計，1,450 條線要三個小時多一點。
+
+### 讓成品更好的工具
+
+- **這些線混得出圖片的顏色嗎**：多色時，頁面會在圖片上用斜線標出板子和線混不出來的地方，說出最缺的是哪個顏色，並可以直接加一條那個顏色的線。色環範例配青、洋紅、黃、黑時，約有 60% 的面積混不出來；加一條綠線就降到三分之一。
+- **讓圖片決定線色**：依圖片選出最多六條線，可以從任何顏色裡選，也可以只從你自己的線色清單裡選。
+- **強調輪廓**與**強調深色細節**：由圖片本身決定哪裡比較重要。後者是拿均勻換對比：開到最強時，臉部範例的對比從原圖的四成左右升到六成左右，但淺色的地方會偏灰，線也多用四成五。兩者預設都是關的。
+- **線的種類**帶入常見的線寬；**用照片量線寬**則從一張「平行的線加上旁邊空白板子」的照片算出線寬。
+- **同一對釘子可以重複繞**：圖片很深的地方最多可以疊三次。通常差別不大。
+- 播放器的**唸出釘號**只用裝在你這台裝置上的語音，不用線上語音；裝置沒有合適的語音時，不提供這個選項。
 
 ### 數字的意思
 
@@ -206,6 +239,7 @@ img2string 把每個線色看成一層不透明、只蓋住每個像素一部分
 npm ci
 npm run dev             # 網頁，網址會印在終端機
 npm test                # 單元與驗收測試，含兩個基準
+npm run test:slow       # 自動順序對照全部 24 種順序（約 2 分鐘）
 npm run e2e             # 端對端測試，使用電腦上的 Microsoft Edge
 npm run bench           # 基準成績表
 npm run bench:browser   # 在瀏覽器的 worker 裡跑同樣的基準

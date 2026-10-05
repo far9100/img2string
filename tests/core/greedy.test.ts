@@ -65,6 +65,19 @@ describe("GreedyRun against generate()", () => {
     const thrice = runGreedy({ ...o, allowRepeat: true, maxLines: [400] }, T, W, null, { maxRepeat: 3 });
     expect(check(thrice.seq, 3)).toBeGreaterThan(1); // repeats are actually used on this picture
   });
+
+  it("with repeats, a run continued from its sequences counts the pairs already used", () => {
+    const o = base({ allowRepeat: true, maxLines: [400] }), T = discAndBar(o.res), W = circleMask(o.res);
+    const whole = runGreedy(o, T, W, null, { maxRepeat: 3 });
+    for (const at of [1, 57, 230]) {
+      const first = new GreedyRun(o, T, W, null, { maxRepeat: 3 });
+      while (first.lines < at && first.step()) { /* stop here */ }
+      const stored = JSON.parse(JSON.stringify(first.seq)) as number[][];
+      const rest = runGreedy(o, T, W, stored, { maxRepeat: 3 });
+      expect(rest.seq, `continued at line ${at}`).toEqual(whole.seq);
+      expect(rest.error()).toBe(whole.error());
+    }
+  });
 });
 
 describe("late start (DECISIONS D-04)", () => {

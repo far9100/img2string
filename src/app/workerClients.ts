@@ -1,6 +1,7 @@
 // The page's side of the preprocess, render and export workers: promises matched by id; where only the latest
 // answer matters (the target while a slider moves, the render while the view changes), a ticket per slot makes
 // older answers resolve to null.
+import type { GamutSummary } from "../core/gamut.ts";
 import type { Options } from "../core/stringart.ts";
 import type { SampleId } from "../core/targets.ts";
 import type { Region } from "../core/truewidth.ts";
@@ -12,7 +13,15 @@ type Pending<T> = { resolve: (v: T) => void; reject: (e: Error) => void };
 
 // ---------- preprocess
 
-export interface TargetAnswer { res: number; target: Float64Array; weight: Float64Array; rgba: Uint8ClampedArray; weightRgba: Uint8ClampedArray }
+export interface TargetAnswer {
+  res: number;
+  target: Float64Array;
+  weight: Float64Array;
+  rgba: Uint8ClampedArray;
+  weightRgba: Uint8ClampedArray;
+  gamut: GamutSummary | null;
+  gamutRgba: Uint8ClampedArray | null;
+}
 
 export interface PreprocessClient {
   setPicture(width: number, height: number, rgba: Uint8ClampedArray): Promise<void>;
@@ -53,7 +62,7 @@ export function createPreprocessClient(): PreprocessClient {
       tickets.set(slot, ticket);
       const m = await call({ t: "target", id: nextId++, ticket, request });
       if (m.t !== "target" || tickets.get(slot) !== ticket) return null;
-      return { res: m.res, target: m.target, weight: m.weight, rgba: m.rgba, weightRgba: m.weightRgba };
+      return { res: m.res, target: m.target, weight: m.weight, rgba: m.rgba, weightRgba: m.weightRgba, gamut: m.gamut, gamutRgba: m.gamutRgba };
     },
   };
 }

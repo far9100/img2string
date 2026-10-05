@@ -1,9 +1,12 @@
 // Actions and effects of the page: the store and the workers are owned here; the panels only call methods and
 // read state (after img2shadow's and img2fold's controllers).
 import { replayModel } from "../core/greedy.ts";
+import { hueName } from "../core/gamut.ts";
 import { toRgba8 } from "../core/image.ts";
 import { errorReduction, meanDeltaE, meanDeltaEFlat } from "../core/metrics.ts";
-import { applyPreset, defaultOrder, ORDER_SEARCH_MAX, ORDER_SEARCH_VERIFY, paletteWarnings, permutations, presetById, proxyOptions, reorder } from "../core/palette.ts";
+import {
+  applyPreset, defaultOrder, freeCandidates, ORDER_SEARCH_MAX, ORDER_SEARCH_VERIFY, paletteWarnings, permutations, pickPalette, placeByLightness, presetById, proxyOptions, reorder, toHex,
+} from "../core/palette.ts";
 import {
   generationKey, LIMITS, modeDefaults, normalizeProject, serializeProject, targetKey, toOptions,
   type Crop, type Mode, type Project, type Result, type Stroke, type ThreadSpec,
@@ -160,6 +163,45 @@ export class Controller {
     this.commit({ ...p, threads: defaultOrder(p.threads) });
   }
 
+  // ---------- threads for the picture (§6.3, M2)
+
+  /** The gamut check of the current settings, or null while it is not known (or in mono mode). */
+  private gamut() {
+    const s = this.state;
+    return s.project.mode === "colour" && s.target && s.target.key === targetKey(s.project) ? s.target.gamut : null;
+  }
+
+  canAddSuggested(): boolean {
+    return !!this.gamut()?.suggestion && this.state.project.threads.length < LIMITS.threads;
+  }
+
+  /** Adds a thread of the colour the gamut check found missing most, where its lightness puts it in the
+   * winding order. */
+  addSuggestedThread(): void {
+    const colour = this.gamut()?.suggestion, p = this.state.project;
+    if (!colour || !this.canAddSuggested()) return;
+    const hex = toHex(colour), threads = p.threads.slice();
+    const budget = p.threads[p.threads.length - 1]?.maxLines ?? modeDefaults(p.mode).maxLines;
+    threads.splice(placeByLightness(threads, hex), 0, { name: t(`hue.${hueName(colour)}`), hex, maxLines: budget });
+    this.commit({ ...p, threads });
+  }
+
+  canAutoPalette(source: "free" | "shelf"): boolean {
+    return !!this.gamut() && (source === "free" || this.state.shelf.length > 0);
+  }
+
+  /** §6.3 "auto palette": replaces the threads by up to `count` colours chosen for the picture, from the
+   * user's own thread colours or freely. */
+  autoPalette(count: number, source: "free" | "shelf"): void {
+    const gamut = this.gamut(), s = this.state, p = s.project;
+    if (!gamut || !this.canAutoPalette(source)) return;
+    const picked = pickPalette(gamut, p.board, source === "shelf" ? s.shelf : freeCandidates(gamut), Math.min(LIMITS.threads, count));
+    if (!picked.length) { this.notify("auto.none"); return; }
+    const budget = p.threads[0]?.maxLines ?? modeDefaults(p.mode).maxLines;
+    this.commit({ ...p, threads: picked.map((c) => ({ name: c.name || t(`hue.${hueName(hexToLinear(c.hex))}`), hex: c.hex, maxLines: budget })) });
+    this.notify("auto.done", { n: picked.length });
+  }
+
   addStroke(stroke: Stroke): void {
     const p = this.state.project;
     if (p.importance.strokes.length >= LIMITS.strokes) return;
@@ -246,10 +288,11 @@ export class Controller {
 
   // ---------- the target and the importance map
 
-  private request(p: Project, res: number): TargetRequest {
+  /** `gamut`: also check the colours (§6.3); only a colour picture has colours a palette can miss. */
+  private request(p: Project, res: number, gamut = p.mode === "colour"): TargetRequest {
     return {
       res, crop: p.image.crop, adjust: p.adjust, mode: p.mode, board: hexToLinear(p.board), threads: p.threads.map((th) => hexToLinear(th.hex)),
-      preset: p.importance.preset, strokes: p.importance.strokes,
+      preset: p.importance.preset, strokes: p.importance.strokes, edges: p.importance.edges, tone: p.importance.tone, gamut,
     };
   }
 
@@ -398,7 +441,7 @@ export class Controller {
     this.store.update((x) => ({ ...x, order: { status: "running", done: 0, total, scores: null, hexes } }));
     const finish = (scores: OrderScore[] | null) => this.store.update((x) => ({ ...x, order: { status: "idle", done: 0, total: 0, scores, hexes } }));
     try {
-      const small = await this.pre.target(this.request(project, proxy.res), "order");
+      const small = await this.pre.target(this.request(project, proxy.res, false), "order");
       if (!small || this.state.order.status !== "running") return finish(null);
       this.pool ??= new ScorePool(generateWorker, defaultPoolSize(navigator.hardwareConcurrency));
       const tick = () => this.store.update((x) => (x.order.status === "running" ? { ...x, order: { ...x.order, done: x.order.done + 1 } } : x));
@@ -529,7 +572,7 @@ export class Controller {
   setPlayerStep(step: number): void {
     const made = this.state.made;
     if (!made?.result) return;
-    const plan = buildPlan(made.result.sequences, made.frame.pins), next = clampPosition(plan, step);
+    const total = made.result.lines.reduce((a, n) => a + n, 0), next = Math.max(0, Math.min(total, Math.round(Number.isFinite(step) ? step : 0)));
     this.store.update((s) => ({ ...s, made: s.made && { ...s.made, player: { ...s.made.player, step: next } } }));
     try {
       localStorage.setItem(progressStorageKey(planKey(made.result.sequences, made.frame.pins)), String(next));

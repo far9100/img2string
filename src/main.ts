@@ -4,6 +4,7 @@ import { Controller } from "./app/controller.ts";
 import { accentFor, textOn } from "./core/palette.ts";
 import { applyI18n, getLang, initialLang, onLangChange, setLang, t, type Lang } from "./i18n/i18n.ts";
 import { mountPlayer } from "./player/view.ts";
+import { mountCalibWizard } from "./ui/calibWizard.ts";
 import { themeHex } from "./ui/canvasUtil.ts";
 import { installInput, isFormField } from "./ui/input.ts";
 import type { Sync } from "./ui/inputPanels.ts";
@@ -17,7 +18,7 @@ function boot(): void {
   const ctl = new Controller();
   ctl.notify = (key, vars, kind) => toast(key, vars ?? {}, kind ?? "");
   const app = document.getElementById("app")!;
-  const player = mountPlayer(ctl);
+  const player = mountPlayer(ctl), calib = mountCalibWizard(ctl);
   // §9: the interface takes on the colour of the thread, here the one wound last (it lies on top); when that
   // colour would not show against the page, the theme's own accent stays
   const accent: Sync = (s) => {
@@ -26,7 +27,7 @@ function boot(): void {
     if (colour) { root.setProperty("--accent", colour); root.setProperty("--accent-text", textOn(colour)); }
     else { root.removeProperty("--accent"); root.removeProperty("--accent-text"); }
   };
-  const layout = mountLayout(app, ctl, () => player.open(), [accent, (s) => player.sync(s)]);
+  const layout = mountLayout(app, ctl, () => player.open(), () => calib.open(), [accent, (s) => player.sync(s)]);
 
   onLangChange(() => {
     for (const button of langButtons) button.setAttribute("aria-pressed", String(button.dataset.lang === getLang()));

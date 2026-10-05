@@ -1,4 +1,5 @@
 // The page's state. `project` is exactly what the project file holds; everything else lives for the session.
+import type { GamutSummary } from "../core/gamut.ts";
 import { defaultProject, type Project, type StopReason } from "../core/project.ts";
 import type { SampleId } from "../core/targets.ts";
 import type { ShelfThread } from "./threadShelf.ts";
@@ -22,6 +23,9 @@ export interface TargetView {
   weight: Float64Array;
   rgba: Uint8ClampedArray;
   weightRgba: Uint8ClampedArray;
+  /** Colour mode only (§6.3): which of the picture's colours the palette cannot mix, and those parts hatched. */
+  gamut: GamutSummary | null;
+  gamutRgba: Uint8ClampedArray | null;
 }
 
 export interface RunState {
@@ -77,6 +81,8 @@ export interface ViewState {
   compare: Compare;
   magnifier: boolean;
   brush: { on: boolean; weight: number; radius: number };
+  /** Hatch the parts of the picture the palette cannot mix (colour mode). */
+  gamut: boolean;
   player: boolean;
 }
 
@@ -116,7 +122,7 @@ export function initialState(): AppState {
     made: null,
     result: null,
     order: { status: "idle", done: 0, total: 0, scores: null, hexes: [] },
-    view: { tab: "target", realistic: false, distanceM: 0, compare: "none", magnifier: false, brush: { on: false, weight: 2, radius: 0.05 }, player: false },
+    view: { tab: "target", realistic: false, distanceM: 0, compare: "none", magnifier: false, brush: { on: false, weight: 2, radius: 0.05 }, gamut: true, player: false },
     issues: [],
     busyExport: false,
     shelf: [],

@@ -1,15 +1,19 @@
 // The winding player (spec §7.4): a full-window dialog with the next pin in large numerals in the colour of the
 // thread being wound, previous and next, the keyboard (Space, Enter or right arrow to advance; left arrow or
-// Backspace to go back), progress and the time left. The position is kept by the controller (localStorage and
-// the project file).
+// Backspace to go back), progress and the time left, and optionally the pin read aloud by a voice of the
+// device. The position is kept by the controller (localStorage and the project file).
 import type { Controller } from "../app/controller.ts";
 import type { AppState } from "../app/state.ts";
 import { accentFor, textOn } from "../core/palette.ts";
 import { pinPositions } from "../core/stringart.ts";
-import { t } from "../i18n/i18n.ts";
+import { getLang, t } from "../i18n/i18n.ts";
 import { fitCanvas, themeColour, themeHex } from "../ui/canvasUtil.ts";
-import { button, h, tx } from "../ui/dom.ts";
-import { buildPlan, hoursMinutes, neighbourThread, positionOfStep, remainingSeconds, viewAt, type Plan } from "./player.ts";
+import { button, checkField, h, tx } from "../ui/dom.ts";
+import { buildPlan, hoursMinutes, neighbourThread, positionOfStep, remainingSeconds, viewAt, type Plan, type View } from "./player.ts";
+import { createSpeaker } from "./voice.ts";
+
+/** Whether to read the pins aloud is remembered on this device (a device has voices or it has not). */
+const VOICE_KEY = "img2string.voice";
 
 export interface PlayerView {
   open(): void;
@@ -46,6 +50,27 @@ export function mountPlayer(ctl: Controller): PlayerView {
   };
   const prevThread = button("player.prevThread", otherThread(-1)), nextThread = button("player.nextThread", otherThread(1));
   const close = button("player.close", () => dialog.close());
+  // §7.4: read the next pin aloud, with a voice that runs on this device only
+  const speaker = createSpeaker();
+  let voiceOn = false, spokenAt = -1;
+  try { voiceOn = localStorage.getItem(VOICE_KEY) === "1"; } catch { /* storage may be blocked */ }
+  const voice = checkField({
+    label: "player.voice",
+    onChange: (on) => {
+      voiceOn = on;
+      try { localStorage.setItem(VOICE_KEY, on ? "1" : "0"); } catch { /* storage may be blocked */ }
+      spokenAt = -1;
+      if (!on) speaker.stop();
+      sync(ctl.state);
+    },
+  });
+  const voiceNote = tx("player.voiceNone", "hint");
+  speaker.onChange(() => sync(ctl.state));
+  /** What is said at a position. */
+  const phrase = (v: View, name: string): string =>
+    v.done ? t("voice.done")
+      : v.tieOn ? (v.thread > 0 ? t("voice.change", { name, from: v.fromPin, pin: v.nextPin }) : t("voice.tie", { from: v.fromPin, pin: v.nextPin }))
+      : String(v.nextPin);
   const dialog = h("dialog", { class: "player", "data-i18n-aria-label": "player.title" },
     h("header", { class: "player-head" }, h("div", { class: "player-colour" }, swatch, threadName, threadCount), close),
     h("div", { class: "player-body" },
@@ -55,6 +80,7 @@ export function mountPlayer(ctl: Controller): PlayerView {
     bar, status,
     h("div", { class: "player-buttons" }, back, forward),
     h("div", { class: "row player-jump" }, tx("player.jumpLabel"), jump, go, prevThread, nextThread),
+    h("div", { class: "row wrap player-voice" }, voice.el, voiceNote),
     tx("player.keys", "hint"),
   );
   document.body.append(dialog);
@@ -73,7 +99,7 @@ export function mountPlayer(ctl: Controller): PlayerView {
     if (e.key === "ArrowRight" || ((e.key === " " || e.key === "Enter") && !onButton)) { e.preventDefault(); move(1); }
     else if (e.key === "ArrowLeft" || e.key === "Backspace") { e.preventDefault(); move(-1); }
   });
-  dialog.addEventListener("close", () => ctl.setView({ player: false }));
+  dialog.addEventListener("close", () => { speaker.stop(); spokenAt = -1; ctl.setView({ player: false }); });
 
   function drawMap(s: AppState, position: number): void {
     const made = s.made;
@@ -146,6 +172,13 @@ export function mountPlayer(ctl: Controller): PlayerView {
     prevThread.hidden = nextThread.hidden = made.threads.length < 2;
     prevThread.disabled = neighbourThread(plan, v.thread, -1) < 0;
     nextThread.disabled = neighbourThread(plan, v.thread, 1) < 0;
+    // the voice: offered only when the device has one of its own for the page's language
+    const lang = getLang(), canSpeak = speaker.available(lang);
+    voice.input.disabled = !canSpeak;
+    voice.set(voiceOn && canSpeak);
+    voiceNote.hidden = canSpeak;
+    if (voiceOn && canSpeak && spokenAt !== v.position) speaker.say(phrase(v, thread?.name ?? ""), lang);
+    spokenAt = v.position;
     drawMap(s, v.position);
   }
 

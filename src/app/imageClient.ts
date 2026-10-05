@@ -10,10 +10,10 @@ export const MAX_SIDE = 4096;
 /** Below this the picture is too small to carry detail to the working grid; the page warns (§14). */
 export const SMALL_SIDE = 200;
 
-export async function decodePicture(file: Blob): Promise<Decoded> {
+export async function decodePicture(file: Blob, maxSide = MAX_SIDE): Promise<Decoded> {
   const bmp = await createImageBitmap(file, { colorSpaceConversion: "none", premultiplyAlpha: "none", imageOrientation: "from-image" });
   try {
-    const k = Math.min(1, MAX_SIDE / Math.max(bmp.width, bmp.height));
+    const k = Math.min(1, maxSide / Math.max(bmp.width, bmp.height));
     const width = Math.max(1, Math.round(bmp.width * k)), height = Math.max(1, Math.round(bmp.height * k));
     const canvas = document.createElement("canvas");
     canvas.width = width;

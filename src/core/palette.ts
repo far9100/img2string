@@ -1,7 +1,9 @@
 // Palettes (spec §6.3): the presets, the default winding order, the checks of §14 that concern colours, the
-// accent colour of §9, and the set-up of the winding-order search.
+// accent colour of §9, the set-up of the winding-order search, and choosing threads for a picture.
+import { autoPalette, type GamutSummary } from "./gamut.ts";
+import { linearToSrgb8 } from "./image.ts";
 import { maxMinSkip, maxResolution, modeDefaults, type Mode, type Project, type ThreadSpec } from "./project.ts";
-import { hexToLinear, oklab, type Options } from "./stringart.ts";
+import { hexToLinear, oklab, type Options, type RGB } from "./stringart.ts";
 
 export interface Preset {
   id: string;
@@ -110,4 +112,35 @@ export function proxyOptions(o: Options): Options {
 /** `o` with its threads (and their budgets) in the given order. */
 export function reorder(o: Options, order: readonly number[]): Options {
   return { ...o, threads: order.map((i) => o.threads[i]!), maxLines: order.map((i) => o.maxLines[i]!) };
+}
+
+/** A linear-RGB colour as #RRGGBB. */
+export const toHex = (c: Readonly<RGB>): string => `#${[c[0], c[1], c[2]].map((v) => linearToSrgb8(v).toString(16).padStart(2, "0")).join("")}`.toUpperCase();
+
+export interface Swatch { name: string; hex: string }
+
+/** The "free colours" the auto palette may pick from (§6.3): the picture's own colour groups, largest first,
+ * and a near-black and a near-white thread, which almost every picture can use. */
+export function freeCandidates(gamut: GamutSummary): Swatch[] {
+  const out: Swatch[] = [];
+  for (const hex of [...gamut.clusters.map((c) => toHex(c.colour)), "#111111", "#F2F2F2"]) if (!out.some((s) => s.hex === hex)) out.push({ name: "", hex });
+  return out;
+}
+
+/**
+ * §6.3 "auto palette": up to `count` of the candidates, greedily those that bring what the board and threads
+ * can mix closest to the picture's colour groups; in §6.3's default order, lightest first. A candidate of the
+ * board's own colour is never picked (it adds nothing), nor one that no longer helps.
+ */
+export function pickPalette(gamut: GamutSummary, boardHex: string, candidates: readonly Swatch[], count: number): Swatch[] {
+  const usable = candidates.filter((c, i) => c.hex !== boardHex && candidates.findIndex((d) => d.hex === c.hex) === i);
+  const picked = autoPalette(gamut.clusters, hexToLinear(boardHex), usable.map((c) => hexToLinear(c.hex)), Math.max(0, Math.round(count)));
+  return defaultOrder(picked.map((i) => usable[i]!));
+}
+
+/** Where a new thread of this colour goes in the winding order: before the first thread darker than it, which
+ * keeps a palette that is in §6.3's default order in that order. */
+export function placeByLightness(threads: readonly { hex: string }[], hex: string): number {
+  const l = lightness(hex), at = threads.findIndex((t) => lightness(t.hex) < l);
+  return at < 0 ? threads.length : at;
 }

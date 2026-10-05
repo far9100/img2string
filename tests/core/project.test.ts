@@ -49,7 +49,7 @@ describe("normalizeProject", () => {
     expect(issues).toEqual([]);
     expect(project.image.crop).toEqual({ cx: 0.5, cy: 0.45, scale: 1.2, rotateDeg: 0 });
     expect(project.adjust.contrast).toBe(0.1);
-    expect(project.importance).toEqual({ preset: "quietRim", strokes: [] });
+    expect(project.importance).toEqual({ preset: "quietRim", strokes: [], edges: 0, tone: 0 }); // the automatic emphasis is off unless asked for
     expect(project.result).toMatchObject({ sequences: [[0, 133, 7]], lines: [2], errorReduction: 0.907, meanDeltaEOk: 9.9 });
   });
 
@@ -89,6 +89,14 @@ describe("normalizeProject", () => {
     expect(issues).toEqual(expect.arrayContaining(["importance", "brush-png"]));
   });
 
+  it("reads the automatic emphasis, within its range", () => {
+    expect(normalizeProject({ importance: { edges: 1.5, tone: 0.5 } }).project.importance).toMatchObject({ edges: 1.5, tone: 0.5 });
+    const { project, issues } = normalizeProject({ importance: { edges: 9, tone: -1 } });
+    expect(project.importance).toMatchObject({ edges: 2, tone: 0 });
+    expect(issues).toContain("importance");
+    expect(normalizeProject({ importance: { edges: "much" } }).project.importance.edges).toBe(0);
+  });
+
   it("drops a result that could not have been generated for the project", () => {
     const good = withResult();
     expect(normalizeProject(good).project.result?.sequences).toEqual([[0, 20, 40, 3, 30]]);
@@ -104,6 +112,9 @@ describe("serializeProject", () => {
   it("round-trips, with number lists on one line and a final newline", () => {
     const p = withResult();
     p.importance.strokes = [{ w: 2, r: 0.04, pts: [0.25, 0.5, 0.26, 0.51] }];
+    p.importance.edges = 1.25;
+    p.importance.tone = 0.5;
+    p.generator.allowRepeat = true;
     const text = serializeProject(p);
     expect(text.endsWith("}\n")).toBe(true);
     expect(text).toContain('"sequences": [\n      [0, 20, 40, 3, 30]\n    ]');
@@ -131,6 +142,9 @@ describe("keys", () => {
     expect(change((q) => { q.adjust.contrast = 0.2; })).not.toBe(key);
     expect(change((q) => { q.image.crop.scale = 1.5; })).not.toBe(key);
     expect(change((q) => { q.importance.preset = "quietRim"; })).not.toBe(key);
+    expect(change((q) => { q.importance.edges = 1; })).not.toBe(key);
+    expect(change((q) => { q.importance.tone = 0.5; })).not.toBe(key);
+    expect(change((q) => { q.generator.allowRepeat = true; })).not.toBe(key);
     // the picture itself does not depend on the frame's size or the budgets
     const q = structuredClone(p);
     q.frame.diameterMm = 300;

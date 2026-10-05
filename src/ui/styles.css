@@ -301,3 +301,32 @@ dialog.player::backdrop { background: rgba(0, 0, 0, 0.55); }
 .chip { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 14px; overflow: hidden; }
 .chip button { border: 0; border-radius: 0; background: var(--field); padding: 2px 8px; font-size: 12.5px; }
 .chip .chip-remove { padding: 2px 7px 2px 4px; color: var(--muted); }
+
+/* ---------- colours the threads can make (§6.3) ---------- */
+.gamut { margin-top: 12px; padding-top: 2px; border-top: 1px solid var(--line); }
+.gamut-status { font-size: 13px; margin: 0 0 6px; }
+.gamut-status.warn { color: var(--warn); }
+.gamut-list { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--muted); }
+.gamut-list li { display: flex; align-items: center; gap: 6px; }
+.swatch { display: inline-block; width: 26px; height: 16px; border-radius: 3px; border: 1px solid var(--line-strong); flex: none; }
+.gamut .row { margin-bottom: 8px; }
+
+/* ---------- a dialog that is a sheet of controls: the thread calibration (§6.6) ---------- */
+dialog.sheet {
+  width: min(680px, calc(100vw - 16px)); max-height: calc(100vh - 16px); border: 1px solid var(--line-strong); border-radius: 10px;
+  background: var(--panel); color: var(--text); padding: 14px 18px 16px;
+}
+dialog.sheet::backdrop { background: rgba(0, 0, 0, 0.55); }
+dialog.sheet h2 { margin: 0; font-size: 16px; }
+.calib-steps { margin: 10px 0; padding-left: 20px; font-size: 13px; }
+.calib-steps li { margin-bottom: 4px; }
+.calib-photo { position: relative; background: var(--stage); border-radius: 8px; margin: 10px 0; min-height: 120px; display: grid; place-items: center; overflow: hidden; }
+.calib-canvas { display: block; touch-action: none; cursor: crosshair; max-width: 100%; }
+.calib-photo .empty { margin: 0; padding: 16px; }
+.calib-result { font-size: 14px; font-weight: 600; margin: 4px 0; min-height: 1.5em; }
+.calib-result.warn { color: var(--warn); font-weight: 400; }
+
+/* ---------- the player's voice ---------- */
+.player-voice { margin-top: 8px; font-size: 13px; }
+.player-voice .field { margin: 0; }
+.player-voice .hint { margin: 0; }

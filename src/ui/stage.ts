@@ -52,6 +52,8 @@ export function mountStage(root: HTMLElement, ctl: Controller, syncs: Sync[]): v
   onResize(stage, (w) => { cssW = w; invalidate(); });
 
   const side = (s: AppState) => s.view.tab === "result" && s.view.compare === "side" && !!s.target;
+  /** The target is shown with its out-of-reach colours hatched. */
+  const hatched = (s: AppState) => s.view.gamut && s.project.mode === "colour" && !s.view.brush.on && (s.target?.gamut?.outShare ?? 0) > 0;
   /** The square the piece occupies on the canvas, in CSS px: [x, y, size]. */
   const frameBox = (s: AppState): [number, number, number] => {
     const max = Math.min(cssW, Math.max(260, window.innerHeight - 300));
@@ -114,6 +116,8 @@ export function mountStage(root: HTMLElement, ctl: Controller, syncs: Sync[]): v
     if (s.view.tab === "target") {
       if (s.target) {
         drawImage(ctx, "target", s.target.rgba, s.target.res, s.target.res, fx, fy, size, dpr);
+        // §6.3: the parts whose colour these threads cannot mix, hatched (not while painting importance)
+        if (s.view.gamut && s.target.gamutRgba && s.project.mode === "colour" && !s.view.brush.on) drawImage(ctx, "gamut", s.target.gamutRgba, s.target.res, s.target.res, fx, fy, size, dpr);
         drawImage(ctx, "weights", s.target.weightRgba, s.target.res, s.target.res, fx, fy, size, dpr);
         ring(ctx, fx, fy, size, dpr, s.project.frame.pins);
       } else message = s.pictureMissing ? t("picture.reopen") : t("run.preparing");
@@ -299,7 +303,7 @@ export function mountStage(root: HTMLElement, ctl: Controller, syncs: Sync[]): v
     canvas.classList.toggle("brush", s.view.tab === "target" && s.view.brush.on);
     canvas.classList.toggle("pan", canCrop(s));
     caption.textContent = !result
-      ? (s.view.brush.on ? t("stage.brushHint") : s.source && !s.source.sample ? t("stage.cropHint") : t("stage.targetHint"))
+      ? (s.view.brush.on ? t("stage.brushHint") : hatched(s) ? t("stage.gamutHint") : s.source && !s.source.sample ? t("stage.cropHint") : t("stage.targetHint"))
       : s.view.compare === "side" ? t("stage.sideHint") : s.view.compare === "wipe" ? t("stage.wipeHint") : s.view.realistic ? t("stage.realisticHint") : t("stage.modelHint");
 
     const cards: HTMLElement[] = [];

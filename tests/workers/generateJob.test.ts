@@ -1,10 +1,11 @@
 // The generate worker's job, driven through a fake port: progress, stop, continue, replacing, scoring.
 import { describe, expect, it } from "vitest";
 import { runGreedy } from "../../src/core/greedy.ts";
+import { MAX_REPEAT } from "../../src/core/project.ts";
 import { circleMask, hexToLinear, type Options } from "../../src/core/stringart.ts";
 import { createGenerateJob, PROGRESS_EVERY, type JobPort } from "../../src/workers/generateJob.ts";
 import type { FromGen, ToGen } from "../../src/workers/protocol.ts";
-import { blobs } from "../helpers/pictures.ts";
+import { blobs, discAndBar } from "../helpers/pictures.ts";
 
 const o: Options = {
   res: 90, pins: 64, diameterMm: 500, threadWidthMm: 0.7, board: [1, 1, 1], threads: ["#FFE000", "#00A0E0", "#111111"].map(hexToLinear),
@@ -86,6 +87,24 @@ describe("the generate job", () => {
     h.handle({ t: "score", id: 5, options: o, target: T.slice(), weight: W.slice() });
     expect(h.out).toHaveLength(1);
     expect(h.out[0]).toMatchObject({ t: "scored", id: 5, error: whole.error(), initialError: whole.initialError, lines: whole.seq.map((s) => s.length - 1) });
+  });
+
+  it("with repeats allowed, no thread uses a pin pair more than three times (§13.5)", async () => {
+    // a black disc and a bar: a picture dark enough for one black thread to want the same line again
+    const h = harness(), repeating: Options = { ...o, threads: [[0, 0, 0]], maxLines: [400], allowRepeat: true }, dark = discAndBar(o.res);
+    h.handle({ t: "start", id: 3, options: repeating, target: dark.slice(), weight: W.slice(), resume: null, preview: false });
+    const done = await h.done(3);
+    expect(done.sequences).toEqual(runGreedy(repeating, dark, W, null, { maxRepeat: MAX_REPEAT }).seq);
+    const uses = new Map<number, number>(), s = done.sequences[0]!;
+    for (let i = 1; i < s.length; i++) {
+      const key = Math.min(s[i - 1]!, s[i]!) * o.pins + Math.max(s[i - 1]!, s[i]!);
+      uses.set(key, (uses.get(key) ?? 0) + 1);
+    }
+    expect(Math.max(...uses.values())).toBeGreaterThan(1); // repeats are used on this picture
+    expect(Math.max(...uses.values())).toBeLessThanOrEqual(3);
+    // the order search scores with the same rule
+    h.handle({ t: "score", id: 4, options: repeating, target: dark.slice(), weight: W.slice() });
+    expect(h.out.find((m) => m.t === "scored")).toMatchObject({ id: 4, error: done.error });
   });
 
   it("answers invalid settings with an error, not an exception", () => {

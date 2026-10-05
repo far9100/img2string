@@ -1,5 +1,6 @@
 // Messages between the page and its workers: discriminated on `t`, matched by `id` (after img2shadow's
 // worker/protocol.ts). Typed arrays travel as transferables where the sender no longer needs them.
+import type { GamutSummary } from "../core/gamut.ts";
 import type { Adjust, Crop, ImportancePreset, Mode, StopReason, Stroke } from "../core/project.ts";
 import type { Options, RGB } from "../core/stringart.ts";
 import type { SampleId } from "../core/targets.ts";
@@ -41,6 +42,11 @@ export interface TargetRequest {
   threads: RGB[];
   preset: ImportancePreset;
   strokes: Stroke[];
+  /** Automatic emphasis (§6.5, §13.5): strength of the edge factor and amount of the tone factor; 0 is off. */
+  edges: number;
+  tone: number;
+  /** Also check which of the picture's colours the palette cannot mix (§6.3). */
+  gamut: boolean;
 }
 
 export type ToPre =
@@ -51,7 +57,11 @@ export type ToPre =
 
 export type FromPre =
   | { t: "ready"; id: number; width: number; height: number }
-  | { t: "target"; id: number; ticket: number; res: number; target: Float64Array; weight: Float64Array; rgba: Uint8ClampedArray; weightRgba: Uint8ClampedArray }
+  | {
+      t: "target"; id: number; ticket: number; res: number; target: Float64Array; weight: Float64Array; rgba: Uint8ClampedArray; weightRgba: Uint8ClampedArray;
+      /** The gamut check and its picture (the out-of-reach parts hatched), when it was asked for. */
+      gamut: GamutSummary | null; gamutRgba: Uint8ClampedArray | null;
+    }
   | { t: "error"; id: number; code: string; detail?: string };
 
 // ---------- render.worker: the picture at true thread width (§7.1)

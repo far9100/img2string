@@ -14,7 +14,7 @@ export interface Layout {
   saveProject(): void;
 }
 
-export function mountLayout(root: HTMLElement, ctl: Controller, openPlayer: () => void, extra: Sync[] = []): Layout {
+export function mountLayout(root: HTMLElement, ctl: Controller, openPlayer: () => void, calibrate: () => void, extra: Sync[] = []): Layout {
   // the accept list makes iOS hand over a JPEG where the photo is stored as HEIC, which only Safari can decode
   const picker = h("input", { type: "file", accept: "image/png,image/jpeg,image/webp", hidden: true, id: "file-input" });
   const projectPicker = h("input", { type: "file", accept: ".json,application/json", hidden: true, id: "project-input" });
@@ -22,7 +22,7 @@ export function mountLayout(root: HTMLElement, ctl: Controller, openPlayer: () =
   const syncs: Sync[] = [...extra];
   mountPicturePanel(params, ctl, syncs, () => picker.click());
   mountPalettePanel(params, ctl, syncs);
-  mountSettingsPanel(params, ctl, syncs);
+  mountSettingsPanel(params, ctl, syncs, calibrate);
   // Generate sits above the canvas, where it is always in view however long the settings column is
   mountGeneratePanel(views, ctl, syncs);
   mountStage(views, ctl, syncs);

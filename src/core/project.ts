@@ -56,7 +56,9 @@ export interface Project {
   mode: Mode;
   image: ImageRef;
   adjust: Adjust;
-  importance: { preset: ImportancePreset; strokes: Stroke[] };
+  /** `edges` (0..2) and `tone` (0..1) are the automatic emphasis of §6.5 and §13.5: more weight on the picture's
+   * outlines, and on its dark parts (DECISIONS D-45, D-49). 0 is off. */
+  importance: { preset: ImportancePreset; strokes: Stroke[]; edges: number; tone: number };
   frame: { shape: "circle"; diameterMm: number; pins: number; pinDiameterMm: number };
   thread: { widthMm: number };
   board: string;
@@ -70,7 +72,7 @@ export interface Project {
 export const LIMITS = {
   diameterMm: [200, 1000], pins: [64, 512], pinDiameterMm: [0.5, 5], widthMm: [0.05, 2], res: [64, 1200], maxLines: [1, 20000],
   threads: 6, scale: [0.2, 20], brightness: [-1, 1], contrast: [-1, 1], gamma: [0.2, 5], rangeCompression: [0.1, 1], saturation: [0, 3], unsharp: [0, 2],
-  strokeWeight: [0, 3], strokeRadius: [0.002, 0.5], strokes: 4000, strokePoints: 4000, secondsPerLine: [1, 120], nameLength: 40,
+  strokeWeight: [0, 3], strokeRadius: [0.002, 0.5], strokes: 4000, strokePoints: 4000, edges: [0, 2], tone: [0, 1], secondsPerLine: [1, 120], nameLength: 40,
 } as const;
 
 /** With generator.allowRepeat, how often one thread may use the same pin pair (§3 "Repeats", §13.5). */
@@ -91,7 +93,7 @@ export function defaultProject(): Project {
     mode: "mono",
     image: { name: "sample-face", sha256: "sample:face", sample: "face", width: d.res, height: d.res, crop: { ...IDENTITY_CROP }, embedded: null },
     adjust: { ...NEUTRAL_ADJUST },
-    importance: { preset: "none", strokes: [] },
+    importance: { preset: "none", strokes: [], edges: 0, tone: 0 },
     frame: { shape: "circle", diameterMm: 500, pins: d.pins, pinDiameterMm: 1.5 },
     thread: { widthMm: 0.25 },
     board: "#FFFFFF",
@@ -230,7 +232,7 @@ export function normalizeProject(raw: unknown): Normalized {
     mode,
     image,
     adjust,
-    importance: { preset, strokes },
+    importance: { preset, strokes, edges: num(ip.edges, LIMITS.edges[0], LIMITS.edges[1], 0, "importance"), tone: num(ip.tone, LIMITS.tone[0], LIMITS.tone[1], 0, "importance") },
     frame,
     thread,
     board: hex(src.board, "#FFFFFF", "board-colour"),
@@ -294,7 +296,10 @@ export function serializeProject(p: Project): string {
       brightness: p.adjust.brightness, contrast: p.adjust.contrast, gamma: p.adjust.gamma, rangeCompression: p.adjust.rangeCompression,
       saturation: p.adjust.saturation, unsharp: p.adjust.unsharp, invert: p.adjust.invert,
     },
-    importance: { preset: p.importance.preset, strokes: p.importance.strokes.map((s) => ({ w: s.w, r: round(s.r, 5), pts: s.pts.map((v) => round(v, 5)) })) },
+    importance: {
+      preset: p.importance.preset, edges: p.importance.edges, tone: p.importance.tone,
+      strokes: p.importance.strokes.map((s) => ({ w: s.w, r: round(s.r, 5), pts: s.pts.map((v) => round(v, 5)) })),
+    },
     frame: { shape: "circle", diameterMm: p.frame.diameterMm, pins: p.frame.pins, pinDiameterMm: p.frame.pinDiameterMm },
     thread: { widthMm: p.thread.widthMm },
     board: p.board,

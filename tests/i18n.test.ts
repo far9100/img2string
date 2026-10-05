@@ -13,7 +13,7 @@ const ROOT = join(__dirname, "..");
 const HTML = readFileSync(join(ROOT, "index.html"), "utf8");
 const CJK = /[\u3000-\u303f\u3400-\u9fff\uf900-\ufaff\uff00-\uffef]/g;
 // keys built at run time from codes, e.g. t("issue." + code)
-const DYNAMIC: string[] = [];
+const DYNAMIC: string[] = ["sample.", "preset.", "issue.", "importance.", "adjust.", "thread.", "compare.", "paper."];
 
 function sources(dir: string): Record<string, string> {
   const out: Record<string, string> = {};

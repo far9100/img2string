@@ -29,8 +29,12 @@ export function benchmark(id: BenchmarkId): Benchmark {
   return { id, options, target: id === "mono" ? face(options.res) : colourWheel(options.res), weight: circleMask(options.res) };
 }
 
-/** What §13.1 reports for each run (thread lengths without the 5 % margin of §7.5). */
-export const BENCHMARK_EXPECTED: Record<BenchmarkId, { lines: number[]; errorReduction: number; deltaE: [number, number]; threadM: number[] }> = {
-  mono: { lines: [1410], errorReduction: 0.907, deltaE: [24.6, 9.9], threadM: [586] },
-  colour: { lines: [1500, 1379, 536, 606], errorReduction: 0.769, deltaE: [31.8, 18.2], threadM: [522, 437, 169, 257] },
+/** What §13.1 reports for each run (thread lengths without the 5 % margin of §7.5), and the SHA-256 of
+ * JSON.stringify(sequences) as the reference generates them, so every engine can be held to the same lines. */
+export const BENCHMARK_EXPECTED: Record<BenchmarkId, { lines: number[]; errorReduction: number; deltaE: [number, number]; threadM: number[]; sequencesSha256: string }> = {
+  mono: { lines: [1410], errorReduction: 0.907, deltaE: [24.6, 9.9], threadM: [586], sequencesSha256: "8c1821d0afffac6bf6c2834d05d3253d4df2fdd9ed452752cc9d0572ae293af0" },
+  colour: {
+    lines: [1500, 1379, 536, 606], errorReduction: 0.769, deltaE: [31.8, 18.2], threadM: [522, 437, 169, 257],
+    sequencesSha256: "0cc0198e69dd16a2828e098c80311a9e338f355dd6dfb79396c38d09e5275acd",
+  },
 };

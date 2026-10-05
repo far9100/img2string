@@ -1,0 +1,109 @@
+// The right column, step 3 "Result & Make" (spec §7): downloads, the materials list, the winding player's
+// launcher, and the project file.
+import type { Controller } from "../app/controller.ts";
+import { materials } from "../core/instructions.ts";
+import { PAPERS } from "../core/project.ts";
+import type { ExportKind } from "../export/build.ts";
+import { t } from "../i18n/i18n.ts";
+import { hoursMinutes, stepAt } from "../player/player.ts";
+import { button, checkField, download, h, numberField, selectField, tx } from "./dom.ts";
+import type { Sync } from "./inputPanels.ts";
+import { toast } from "./toast.ts";
+
+export interface OutputPanel {
+  saveProject(): void;
+}
+
+export function mountOutputPanel(root: HTMLElement, ctl: Controller, syncs: Sync[], pickProject: () => void, openPlayer: () => void): OutputPanel {
+  const get = (kind: ExportKind) => async () => {
+    const file = await ctl.exportFile(kind);
+    if (file) download(new Blob([file.bytes as Uint8Array<ArrayBuffer>], { type: file.mime }), file.name);
+  };
+  const preview = async () => {
+    const file = await ctl.exportPreview();
+    if (file) download(new Blob([file.bytes as Uint8Array<ArrayBuffer>], { type: file.mime }), file.name);
+  };
+  const saveProject = () => {
+    const { text, name, stale } = ctl.projectText();
+    download(new Blob([text], { type: "application/json" }), name);
+    toast(stale ? "project.savedStale" : "project.saved", { name });
+  };
+
+  const paper = selectField({ label: "out.paper", options: PAPERS.map((p) => ({ value: p, label: `paper.${p}` })), onChange: (v) => ctl.set(["paper"], v) });
+  const templateButtons = [button("out.templatePdf", get("template-pdf"), "primary"), button("out.templateSvg", get("template-svg")), button("out.templateDxf", get("template-dxf"))];
+  const pieceButtons = [
+    button("out.instructionsPdf", get("instructions-pdf"), "primary"), button("out.instructionsCsv", get("instructions-csv")), button("out.instructionsTxt", get("instructions-txt")),
+    button("out.previewPng", preview), button("out.linesSvg", get("lines-svg")),
+  ];
+  const needResult = h("p", { class: "hint", "data-i18n": "out.needResult", text: t("out.needResult") });
+
+  const list = h("table", { class: "materials" });
+  const seconds = numberField({ label: "player.secondsPerLine", unit: "s", min: 1, max: 120, step: 1, onCommit: (v) => ctl.setSecondsPerLine(v) });
+  const play = button("player.start", openPlayer, "primary big");
+  const embed = checkField({ label: "project.embed", onChange: (v) => void ctl.embedPicture(v) });
+
+  root.append(
+    h("section", { class: "group" },
+      h("h2", { class: "step" }, h("span", { class: "step-no", text: "3" }), tx("step.make")),
+      h("h3", { "data-i18n": "group.template", text: t("group.template") }),
+      paper.el,
+      h("div", { class: "stack" }, ...templateButtons),
+      tx("out.printHint", "hint"),
+    ),
+    h("section", { class: "group" },
+      h("h3", { "data-i18n": "group.winding", text: t("group.winding") }),
+      needResult,
+      h("div", { class: "stack" }, play),
+      h("div", { class: "stack" }, ...pieceButtons),
+    ),
+    h("section", { class: "group" }, h("h3", { "data-i18n": "group.materials", text: t("group.materials") }), list, seconds.el),
+    h("section", { class: "group" },
+      h("h3", { "data-i18n": "group.project", text: t("group.project") }),
+      h("div", { class: "row wrap" }, button("project.save", saveProject), button("project.open", pickProject)),
+      embed.el,
+      tx("project.hint", "hint"),
+    ),
+  );
+
+  syncs.push((s) => {
+    const made = s.made, has = !!made?.result && made.result.lines.some((n) => n > 0), busy = s.busyExport;
+    paper.set(s.project.paper);
+    for (const b of templateButtons) b.disabled = busy;
+    for (const b of pieceButtons) b.disabled = busy || !has;
+    needResult.hidden = has;
+    play.disabled = !has;
+    // where the player would open, in the words of the printed instructions: the thread and its step
+    const position = made?.player.step ?? 0, at = stepAt(made?.result?.lines ?? [], position);
+    play.dataset.i18n = !has || position <= 0 ? "player.start" : at.done ? "player.reopen" : made!.threads.length > 1 ? "player.resumeThread" : "player.resume";
+    play.textContent = t(play.dataset.i18n, { n: at.step, k: at.thread + 1 });
+    seconds.set(s.project.player.secondsPerLine);
+    embed.set(!!s.project.image.embedded);
+    embed.input.disabled = !s.source || !!s.source.sample;
+
+    const rows: HTMLElement[] = [];
+    if (has) {
+      const m = materials(made!);
+      for (const th of m.threads) {
+        const dot = h("span", { class: "dot" });
+        dot.style.setProperty("background", th.hex);
+        rows.push(h("tr", null, h("th", { scope: "row" }, dot, th.name), h("td", { text: t("out.lineCount", { n: th.lines }) }), h("td", { text: `${Math.ceil(th.lengthM)} m` })));
+      }
+      const time = hoursMinutes(m.windingSeconds);
+      rows.push(
+        h("tr", { class: "total" }, h("th", { scope: "row", text: t("out.total") }), h("td", { text: t("out.lineCount", { n: m.totalLines }) }), h("td", { text: `${Math.ceil(m.totalLengthM)} m` })),
+        h("tr", null, h("th", { scope: "row", text: t("out.nails") }), h("td", { colspan: 2, text: t("out.nailsValue", { n: m.nails, mm: m.nailLengthMm }) })),
+        h("tr", null, h("th", { scope: "row", text: t("out.board") }), h("td", { colspan: 2, text: t("out.boardValue", { mm: m.boardMm }) })),
+        h("tr", null, h("th", { scope: "row", text: t("out.time") }), h("td", { colspan: 2, text: t("out.timeValue", { h: time.h, min: time.min }) })),
+      );
+    } else {
+      const frame = s.project.frame;
+      rows.push(
+        h("tr", null, h("th", { scope: "row", text: t("out.nails") }), h("td", { colspan: 2, text: t("out.nailsValue", { n: frame.pins, mm: frame.pinDiameterMm <= 2 ? 25 : 30 }) })),
+        h("tr", null, h("th", { scope: "row", text: t("out.board") }), h("td", { colspan: 2, text: t("out.boardValue", { mm: frame.diameterMm + 40 }) })),
+      );
+    }
+    list.replaceChildren(h("tbody", null, ...rows));
+  });
+
+  return { saveProject };
+}

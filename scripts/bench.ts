@@ -6,6 +6,7 @@
 //              least twice as fast as the reference on the colour benchmark (§13.5)
 // Thread lengths are without the 5 % margin of §7.5, as in the spec's table.
 import { BENCHMARK_IDS, benchmark, type Benchmark } from "../src/core/benchmarks.ts";
+import { runGreedy } from "../src/core/greedy.ts";
 import { errorReduction, meanDeltaE, meanDeltaEFlat } from "../src/core/metrics.ts";
 import { coverageAlpha, generate, Model, pinPositions, rasterLine, threadLengthMm } from "../src/core/stringart.ts";
 
@@ -14,7 +15,11 @@ export interface Engine {
   run(b: Benchmark): number[][];
 }
 
-export const ENGINES: Engine[] = [{ name: "reference (§12)", run: (b) => generate(b.options, b.target, b.weight).sequences }];
+export const ENGINES: Engine[] = [
+  { name: "reference (§12)", run: (b) => generate(b.options, b.target, b.weight).sequences },
+  // what the app runs: fused scoring and the crossing cache (src/core/greedy.ts), both exact
+  { name: "app (GreedyRun)", run: (b) => runGreedy(b.options, b.target, b.weight).seq.map((s) => s.slice()) },
+];
 
 const arg = (name: string) => process.argv.find((a) => a === `--${name}` || a.startsWith(`--${name}=`));
 const JSON_ONLY = Boolean(arg("json")), ASSERT = Boolean(arg("assert"));

@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import * as shipped from "../../src/core/stringart.ts";
 import { BENCHMARK_EXPECTED, benchmark, type BenchmarkId } from "../../src/core/benchmarks.ts";
 import { errorReduction, meanDeltaE, meanDeltaEFlat } from "../../src/core/metrics.ts";
+import { sha256 } from "../helpers/hash.ts";
 import { mulberry32, pinPair } from "../helpers/rng.ts";
 import { loadSpecReference, specPresent } from "../helpers/spec.ts";
 
@@ -192,6 +193,7 @@ describe("the benchmarks of §13.1, with the shipped core", () => {
     const m = new shipped.Model(o, target, weight), P = shipped.pinPositions(o.pins, o.res), alpha = shipped.coverageAlpha(o);
     R.sequences.forEach((s, k) => { for (let i = 1; i < s.length; i++) m.apply(k, shipped.rasterLine(o.res, alpha, P[2 * s[i - 1]!]!, P[2 * s[i - 1]! + 1]!, P[2 * s[i]!]!, P[2 * s[i]! + 1]!)); });
     return {
+      sha: sha256(R.sequences),
       lines: R.sequences.map((s) => s.length - 1),
       reduction: (100 * errorReduction(R.error, R.initialError)).toFixed(1),
       deltaE: [meanDeltaEFlat(o.board, target, weight).toFixed(1), meanDeltaE(m.C, target, weight).toFixed(1)],
@@ -200,7 +202,7 @@ describe("the benchmarks of §13.1, with the shipped core", () => {
   };
   const expected = (id: BenchmarkId) => {
     const e = BENCHMARK_EXPECTED[id];
-    return { lines: e.lines, reduction: (100 * e.errorReduction).toFixed(1), deltaE: e.deltaE.map((v) => v.toFixed(1)), threadM: e.threadM.map((v) => v.toFixed(0)) };
+    return { sha: e.sequencesSha256, lines: e.lines, reduction: (100 * e.errorReduction).toFixed(1), deltaE: e.deltaE.map((v) => v.toFixed(1)), threadM: e.threadM.map((v) => v.toFixed(0)) };
   };
 
   it("mono: 1,410 lines, 90.7 %, mean Delta-E 24.6 -> 9.9, 586 m", { timeout: 180_000 }, () => {

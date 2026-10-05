@@ -1,0 +1,97 @@
+// The generate worker's job, driven through a fake port: progress, stop, continue, replacing, scoring.
+import { describe, expect, it } from "vitest";
+import { runGreedy } from "../../src/core/greedy.ts";
+import { circleMask, hexToLinear, type Options } from "../../src/core/stringart.ts";
+import { createGenerateJob, PROGRESS_EVERY, type JobPort } from "../../src/workers/generateJob.ts";
+import type { FromGen, ToGen } from "../../src/workers/protocol.ts";
+import { blobs } from "../helpers/pictures.ts";
+
+const o: Options = {
+  res: 90, pins: 64, diameterMm: 500, threadWidthMm: 0.7, board: [1, 1, 1], threads: ["#FFE000", "#00A0E0", "#111111"].map(hexToLinear),
+  maxLines: [140, 140, 140], minSkip: 6, allowRepeat: false,
+};
+const T = blobs(o.res, 21), W = circleMask(o.res);
+
+/** A port whose pause() delivers the messages queued for the "worker", like the event loop does. */
+function harness() {
+  const out: FromGen[] = [], inbox: ToGen[] = [];
+  let clock = 0, pauses = 0;
+  const hooks: { onPause?: (n: number) => void } = {};
+  const port: JobPort = {
+    post: (m) => out.push(m),
+    now: () => (clock += 30), // every look at the clock is 30 ms later, so the job pauses after every line
+    pause: async () => {
+      hooks.onPause?.(++pauses);
+      while (inbox.length) handle(inbox.shift()!);
+    },
+  };
+  const handle = createGenerateJob(port);
+  const start = (id: number, resume: number[][] | null = null, preview = false) => handle({ t: "start", id, options: o, target: T.slice(), weight: W.slice(), resume, preview });
+  const done = async (id: number) => {
+    await expect.poll(() => out.some((m) => m.t === "done" && m.id === id), { timeout: 60_000, interval: 10 }).toBe(true);
+    const m = out.find((x) => x.t === "done" && x.id === id)!;
+    if (m.t !== "done") throw new Error("unreachable");
+    return m;
+  };
+  return { out, inbox, hooks, handle, start, done };
+}
+
+describe("the generate job", () => {
+  const whole = runGreedy(o, T, W);
+
+  it("runs to the end like the stepper and reports why it ended", async () => {
+    const h = harness();
+    h.start(1, null, true);
+    const done = await h.done(1);
+    expect(done.sequences).toEqual(whole.seq);
+    expect(done.error).toBe(whole.error());
+    expect(done.reason).toBe(whole.outcome().reason);
+    expect(done.rgba.length).toBe(4 * o.res * o.res);
+    const progress = h.out.filter((m) => m.t === "progress");
+    expect(progress.length).toBe(Math.floor(whole.lines / PROGRESS_EVERY));
+    for (const m of progress) if (m.t === "progress") expect(m.rgba?.length).toBe(4 * o.res * o.res);
+  });
+
+  it("stops when asked, keeps what it has, and continues later to the same end", async () => {
+    const h = harness();
+    h.hooks.onPause = (n) => { if (n === 120) h.inbox.push({ t: "stop", id: 99 }); };
+    h.start(1);
+    const stopped = await h.done(1);
+    expect(stopped.reason).toBe("stopped");
+    const lines = stopped.sequences.reduce((n, s) => n + Math.max(0, s.length - 1), 0);
+    expect(lines).toBeGreaterThan(50);
+    expect(lines).toBeLessThan(whole.lines);
+    stopped.sequences.forEach((s, k) => expect(whole.seq[k]!.slice(0, s.length)).toEqual(s));
+
+    h.hooks.onPause = undefined;
+    h.start(2, stopped.sequences);
+    const finished = await h.done(2);
+    expect(finished.sequences).toEqual(whole.seq);
+    // a continued run reports only the lines added since: the page already has the rest
+    const tails = h.out.filter((m) => m.t === "progress" && m.id === 2).reduce((n, m) => n + (m.t === "progress" ? m.tail.length / 2 : 0), 0);
+    expect(tails).toBeLessThanOrEqual(whole.lines - lines);
+  });
+
+  it("a newer start ends the older run", async () => {
+    const h = harness();
+    h.hooks.onPause = (n) => { if (n === 30) h.inbox.push({ t: "start", id: 2, options: o, target: T.slice(), weight: W.slice(), resume: null, preview: false }); };
+    h.start(1);
+    expect((await h.done(1)).reason).toBe("stopped");
+    h.hooks.onPause = undefined;
+    expect((await h.done(2)).sequences).toEqual(whole.seq);
+  });
+
+  it("scores a set-up without progress messages (the winding-order search)", () => {
+    const h = harness();
+    h.handle({ t: "score", id: 5, options: o, target: T.slice(), weight: W.slice() });
+    expect(h.out).toHaveLength(1);
+    expect(h.out[0]).toMatchObject({ t: "scored", id: 5, error: whole.error(), initialError: whole.initialError, lines: whole.seq.map((s) => s.length - 1) });
+  });
+
+  it("answers invalid settings with an error, not an exception", () => {
+    const h = harness();
+    h.handle({ t: "start", id: 7, options: { ...o, maxLines: [0, 10, 10] }, target: T.slice(), weight: W.slice(), resume: null, preview: false });
+    h.handle({ t: "score", id: 8, options: { ...o, pins: 10 }, target: T.slice(), weight: W.slice() });
+    expect(h.out.map((m) => [m.t, m.id, m.t === "error" ? m.code : ""])).toEqual([["error", 7, "settings"], ["error", 8, "settings"]]);
+  });
+});

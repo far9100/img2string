@@ -3,6 +3,9 @@
 **Turn a picture into string art you can wind by hand.**<br>
 **把圖片變成可以親手繞出來的釘線畫。**
 
+**Use it online: <https://far9100.github.io/img2string/>** (nothing to download or install)<br>
+**線上使用：<https://far9100.github.io/img2string/>**（不需要下載或安裝）
+
 [English](#english) · [繁體中文](#繁體中文)
 
 ---
@@ -30,6 +33,9 @@ Start: pin 61 (2:50) · End: pin 139 (6:30) · Lines: 1450 · Thread: 629 m
 on a 500 mm frame, one black thread.*
 
 ### Use it
+
+Open **<https://far9100.github.io/img2string/>** in your browser, on a computer
+or a phone. There is nothing to download or install.
 
 1. **Upload picture** (or drop it on the page, or paste it), or try a sample.
    Drag the picture to place it inside the pin ring; scroll or pinch to zoom.
@@ -166,7 +172,7 @@ sequence as CSV or text, the preview as PNG, and the lines as SVG.
 
 ### Run it locally
 
-Node.js 24 or newer:
+Only needed to work on the code. Node.js 24 or newer:
 
 ```
 npm ci
@@ -178,6 +184,9 @@ npm run bench           # the benchmark table
 npm run bench:browser   # the same benchmarks in the browser's worker
 npm run build           # the static site, in dist/
 ```
+
+Every push to `main` is tested, built and published to the address above
+([.github/workflows/pages.yml](.github/workflows/pages.yml)).
 
 ### More
 
@@ -209,6 +218,8 @@ img2string 會算出線要怎麼繞在圓框的釘子上，讓人從正常的觀
 *內建臉部範例的繞線說明開頭：500 mm 圓框、256 根釘、一條黑線。*
 
 ### 使用方式
+
+用瀏覽器打開 **<https://far9100.github.io/img2string/>** 就能用，電腦或手機都可以，不需要下載或安裝。
 
 1. 按〔上傳圖片〕（也可以把圖拖進頁面或直接貼上），或先試內建範例。拖曳圖片把它擺進釘環，滾輪或雙指可以縮放。
 2. 選顏色：〔單色〕或〔多色〕、調色盤、板子顏色與繞線順序。設定圓框直徑、釘數（64 到 512）與線寬。
@@ -263,7 +274,7 @@ img2string 把每個線色看成一層不透明、只蓋住每個像素一部分
 
 ### 本機執行
 
-需要 Node.js 24 以上：
+只有要改程式時才需要。需要 Node.js 24 以上：
 
 ```
 npm ci
@@ -275,6 +286,8 @@ npm run bench           # 基準成績表
 npm run bench:browser   # 在瀏覽器的 worker 裡跑同樣的基準
 npm run build           # 靜態網站，輸出到 dist/
 ```
+
+每次推送到 `main`，都會自動測試、建置並發佈到上面的網址（[.github/workflows/pages.yml](.github/workflows/pages.yml)）。
 
 ### 更多說明
 

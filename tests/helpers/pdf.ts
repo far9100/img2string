@@ -5,7 +5,8 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { unzlibSync } from "fflate";
 import { decodePDFRawStream, PDFArray, PDFDocument, type PDFRawStream } from "pdf-lib";
-import { defaultProject, generationKey, type Project } from "../../src/core/project.ts";
+import { allowedPairs, pictureAspect } from "../../src/core/frame.ts";
+import { defaultProject, frameSpec, generationKey, type Project } from "../../src/core/project.ts";
 import { mulberry32 } from "./rng.ts";
 
 const latin1 = (b: Uint8Array) => Array.from(b, (c) => String.fromCharCode(c)).join("");
@@ -47,6 +48,31 @@ export function colourProject(lines: readonly number[] = [1500, 1379, 536, 606],
       { name: "black", hex: "#111111", maxLines: 1500 },
     ];
   }, seed);
+}
+
+/**
+ * A project on a rectangular frame round a `width` x `height` picture (DECISIONS D-58), with a made-up result:
+ * every step goes to a pin the frame allows from where the thread is, as the generator would.
+ */
+export function rectProject(lines: readonly number[], width = 600, height = 800, edit: (p: Project) => void = () => {}, seed = 1): Project {
+  const p = defaultProject();
+  p.image = { name: "picture.png", sha256: "f".repeat(64), sample: null, width, height, crop: { ...p.image.crop }, embedded: null };
+  p.frame = { ...p.frame, shape: "rect", aspect: pictureAspect(width, height) };
+  edit(p);
+  if (p.threads.length !== lines.length) throw new Error(`${lines.length} line counts for ${p.threads.length} threads`);
+  const random = mulberry32(seed), N = p.frame.pins, ok = allowedPairs({ pins: N, minSkip: p.generator.minSkip, ...frameSpec(p.frame) });
+  const sequences = lines.map((n) => {
+    if (n === 0) return [];
+    const sequence = [Math.floor(random() * N)];
+    for (let i = 0; i < n; i++) {
+      const from = sequence[i]!, partners: number[] = [];
+      for (let v = 0; v < N; v++) if (ok[from * N + v]) partners.push(v);
+      sequence.push(partners[Math.floor(random() * partners.length)]!);
+    }
+    return sequence;
+  });
+  p.result = { key: generationKey(p), sequences, lines: sequences.map((s) => Math.max(0, s.length - 1)), errorReduction: 0.9, meanDeltaEOk: 10, reason: "budget" };
+  return p;
 }
 
 /** Set IMG2STRING_KEEP to a folder to keep the files the tests build, for a look at the real thing. */

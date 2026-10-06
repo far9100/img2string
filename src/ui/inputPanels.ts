@@ -4,6 +4,7 @@ import type { Controller } from "../app/controller.ts";
 import type { AppState } from "../app/state.ts";
 import { SLIDER, type Tuning } from "../core/autoAdjust.ts";
 import { THREAD_PRESETS } from "../core/calibration.ts";
+import { frameSizeMm, pinSpacingMm } from "../core/frame.ts";
 import { hueName, type GamutSummary } from "../core/gamut.ts";
 import { ORDER_SEARCH_MAX, PRESETS, presetOf, toHex } from "../core/palette.ts";
 import { MOSTLY_BLANK } from "../core/preprocess.ts";
@@ -266,12 +267,24 @@ export function mountPalettePanel(root: HTMLElement, ctl: Controller, syncs: Syn
 
 // ---------- step 2: frame, thread, adjustments, importance, generation settings
 
+/** A picture whose long side is this many times its short side is told that a round frame cannot show all of
+ * it (D-58): at 1.1 the circle shows 71 % of the picture, at 4:3 it shows 59 %. */
+const NOT_SQUARE = 1.1;
+
 export function mountSettingsPanel(root: HTMLElement, ctl: Controller, syncs: Sync[], calibrate: () => void): void {
   const D = numberField({ label: "frame.diameter", unit: "mm", min: LIMITS.diameterMm[0], max: LIMITS.diameterMm[1], step: 10, onCommit: (v) => ctl.set(["frame", "diameterMm"], v) });
   const pins = numberField({ label: "frame.pins", min: LIMITS.pins[0], max: LIMITS.pins[1], step: 1, onCommit: (v) => ctl.set(["frame", "pins"], v) });
   const pinD = numberField({ label: "frame.pinDiameter", unit: "mm", min: LIMITS.pinDiameterMm[0], max: LIMITS.pinDiameterMm[1], step: 0.1, onCommit: (v) => ctl.set(["frame", "pinDiameterMm"], v) });
   const width = numberField({ label: "thread.width", unit: "mm", min: LIMITS.widthMm[0], max: LIMITS.widthMm[1], step: 0.01, hint: "thread.widthHint", onCommit: (v) => ctl.set(["thread", "widthMm"], v) });
   const spacing = h("p", { class: "stats" });
+  // D-58: round, or a rectangle with the picture's proportions; a picture that is not square is told so
+  const shape = selectField({
+    label: "frame.shape", options: [{ value: "circle", label: "frame.shapeCircle" }, { value: "rect", label: "frame.shapeRect" }],
+    onChange: (v) => ctl.set(["frame", "shape"], v),
+  });
+  const shapeNote = h("p", { class: "advice" });
+  const useRect = button("frame.useRect", () => ctl.set(["frame", "shape"], "rect"));
+  const shapeAdvice = h("div", { class: "frame-advice" }, shapeNote, h("div", { class: "row wrap" }, useRect));
   // §6.6: typical widths, or the width measured from a photograph of a test patch
   const kind = selectField({
     label: "thread.kind",
@@ -332,7 +345,7 @@ export function mountSettingsPanel(root: HTMLElement, ctl: Controller, syncs: Sy
   root.append(
     h("section", { class: "group" },
       h("h3", { "data-i18n": "group.frame", text: t("group.frame") }),
-      h("div", { class: "pair" }, D.el, pins.el), h("div", { class: "pair" }, width.el, pinD.el), spacing,
+      shape.el, h("div", { class: "pair" }, D.el, pins.el), h("div", { class: "pair" }, width.el, pinD.el), spacing, shapeAdvice,
       kind.el, h("div", { class: "row wrap" }, measure),
     ),
     h("section", { class: "group tune" },
@@ -365,8 +378,22 @@ export function mountSettingsPanel(root: HTMLElement, ctl: Controller, syncs: Sy
     pinD.set(p.frame.pinDiameterMm);
     width.set(p.thread.widthMm);
     kind.set(THREAD_PRESETS.find((x) => x.widthMm === p.thread.widthMm)?.id ?? "custom");
-    const gap = (Math.PI * p.frame.diameterMm) / p.frame.pins;
-    spacing.textContent = t("frame.spacing", { gap: Number(gap.toFixed(1)), place: Number((gap / 2).toFixed(1)) });
+    const rect = p.frame.shape === "rect", one = (v: number) => Number(v.toFixed(1));
+    shape.set(p.frame.shape);
+    // the same field is the diameter of a circle and the longer side of a rectangle
+    const sizeLabel = D.el.querySelector("label");
+    if (sizeLabel) { sizeLabel.dataset.i18n = rect ? "frame.longSide" : "frame.diameter"; sizeLabel.textContent = t(sizeLabel.dataset.i18n); }
+    if (rect) {
+      const size = frameSizeMm(p.frame), apart = pinSpacingMm(p.frame);
+      spacing.textContent = t("frame.spacingRect", { w: Math.round(size.width), h: Math.round(size.height), gap: one(apart.along), nearest: one(apart.nearest) });
+    } else {
+      const gap = (Math.PI * p.frame.diameterMm) / p.frame.pins;
+      spacing.textContent = t("frame.spacing", { gap: Number(gap.toFixed(1)), place: Number((gap / 2).toFixed(1)) });
+    }
+    // a picture that is not square loses its ends in a round frame: say how much is left, and offer the other frame
+    const src = s.source, long = src ? Math.max(src.width, src.height) : 0, short = src ? Math.min(src.width, src.height) : 0;
+    shapeAdvice.hidden = !(src && !src.sample && !rect && short > 0 && long / short >= NOT_SQUARE);
+    if (!shapeAdvice.hidden) shapeNote.textContent = t("frame.notSquare", { w: src!.width, h: src!.height, percent: Math.round((100 * (Math.PI / 4) * short) / long) });
     const tuning = s.tune.status === "running", last = s.tune.last && s.tune.last.key === targetKey(p) ? s.tune.last : null;
     tune.hidden = tuning;
     tune.disabled = !ctl.canAutoAdjust();
@@ -397,7 +424,7 @@ export function mountSettingsPanel(root: HTMLElement, ctl: Controller, syncs: Sy
     res.set(p.generator.res);
     res.input.max = String(Math.min(LIMITS.res[1], maxResolution(p.frame.diameterMm, p.thread.widthMm)));
     skip.set(p.generator.minSkip);
-    skip.input.max = String(maxMinSkip(p.frame.pins));
+    skip.input.max = String(maxMinSkip(p.frame.pins, p.frame.shape));
     const alpha = (p.thread.widthMm * (p.generator.res - 1)) / p.frame.diameterMm;
     const codes = s.issues.filter((c) => c === "alpha" || c === "min-skip" || c === "frame" || c === "thread" || c === "generator" || c === "budget");
     notes.replaceChildren(h("li", { class: "plain", text: t("gen.alpha", { alpha: Number(alpha.toFixed(2)) }) }), ...codes.map((c) => h("li", { text: t(`issue.${c}`) })));

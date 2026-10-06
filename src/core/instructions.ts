@@ -3,9 +3,12 @@
 // Sequences hold 0-based pins (§11); everything a person reads here is 1-based, pin 1 at 12 o'clock and
 // numbers growing clockwise as seen from the front (§2). Lengths include the 5 % margin (DECISIONS D-05).
 // No DOM: the PDF is laid out from sheetTexts() in the export worker, and the tests run in Node.
+//
+// On a rectangular frame (DECISIONS D-58) pin 1 is next to the top left corner and the hint is the side a pin
+// is on with its number along that side, counted the way the pins are numbered.
 import { t, type Lang } from "../i18n/translate.ts";
-import { toOptions, type Project } from "./project.ts";
-import { threadLengthMm } from "./stringart.ts";
+import { frameSizeMm, frameThreadMm, pinPlace, type Side } from "./frame.ts";
+import { toOptions, type Frame, type Project } from "./project.ts";
 
 /** Spare thread on top of the computed length (§7.5). */
 export const THREAD_MARGIN = 0.05;
@@ -23,6 +26,32 @@ export function clockHint(pin0: number, pins: number): string {
   const step = Math.floor((288 * pin + pins) / (2 * pins)) % 144;
   const hour = Math.floor(step / 12);
   return `${hour === 0 ? 12 : hour}:${String((step % 12) * 5).padStart(2, "0")}`;
+}
+
+/** The words for "on this side, the n-th pin" and the letters the CSV uses for the sides. */
+const SIDE_TEXT: Record<Side, string> = { top: "ins.sideTop", right: "ins.sideRight", bottom: "ins.sideBottom", left: "ins.sideLeft" };
+const SIDE_CODE: Record<Side, string> = { top: "T", right: "R", bottom: "B", left: "L" };
+
+/** Where to look for a pin, as the sheet prints it: its clock position on a round frame; on a rectangular one
+ * its side and its number along that side (from the left on the top, from the top on the right, from the right
+ * on the bottom, from the bottom on the left: the way the pins are numbered). */
+export function pinHint(frame: Frame, pin0: number, lang: Lang): string {
+  const place = pinPlace(frame, pin0);
+  return place ? t(SIDE_TEXT[place.side], { n: place.n }, undefined, lang) : clockHint(pin0, frame.pins);
+}
+
+/** The same in no language, for the CSV: the clock position, or T, R, B or L and the number along that side. */
+export function pinCode(frame: Frame, pin0: number): string {
+  const place = pinPlace(frame, pin0);
+  return place ? `${SIDE_CODE[place.side]}${place.n}` : clockHint(pin0, frame.pins);
+}
+
+/** What a nail template is, for its page strip and the file's title: "Nail template · 500 mm · 256 pins", with
+ * a rectangular frame's two sides in place of the diameter. */
+export function templateTitle(frame: Frame, lang: Lang): string {
+  if (frame.shape !== "rect") return t("tpl.title", { d: frame.diameterMm, pins: frame.pins }, undefined, lang);
+  const { width, height } = frameSizeMm(frame);
+  return t("tpl.titleRect", { w: Math.round(width), h: Math.round(height), pins: frame.pins }, undefined, lang);
 }
 
 export interface ThreadPlan {
@@ -50,7 +79,7 @@ export function threadPlans(p: Project): ThreadPlan[] {
     const lines = Math.max(0, sequence.length - 1);
     return {
       index, name: thread.name, hex: thread.hex, sequence, lines,
-      lengthMm: threadLengthMm(sequence, o, p.frame.pinDiameterMm) * (1 + THREAD_MARGIN),
+      lengthMm: frameThreadMm(o, sequence, p.frame.pinDiameterMm) * (1 + THREAD_MARGIN),
       startPin: lines ? sequence[0]! : -1,
       endPin: lines ? sequence[sequence.length - 1]! : -1,
     };
@@ -64,7 +93,7 @@ export interface Materials {
   totalLengthM: number;
   nails: number;
   nailLengthMm: number;
-  /** D + 40. */
+  /** D + 40: the side of a round frame's board, the longer side of a rectangular frame's (boardSizeMm has both). */
   boardMm: number;
   /** Total lines x seconds per line. */
   windingSeconds: number;
@@ -86,21 +115,28 @@ export function materials(p: Project): Materials {
   };
 }
 
+/** The board a frame needs: the frame and BOARD_MARGIN_MM all round (§7.5), in millimetres. */
+export function boardSizeMm(frame: Frame): { width: number; height: number } {
+  const { width, height } = frameSizeMm(frame);
+  return { width: width + 2 * BOARD_MARGIN_MM, height: height + 2 * BOARD_MARGIN_MM };
+}
+
 export interface Row {
   /** 1-based number of the first step in the row. */
   index: number;
   /** 1-based. */
   pins: number[];
-  /** Hint for the row's first pin. */
+  /** Hint for the row's first pin: a clock position, or on a rectangular frame a side and a number. */
   clock: string;
 }
 
-/** The sequence in rows of `perRow` pins (default 10). The first pin of a thread is where the thread is tied on. */
-export function sequenceRows(sequence: readonly number[], pins: number, perRow = 10): Row[] {
+/** The sequence in rows of `perRow` pins (default 10). The first pin of a thread is where the thread is tied on.
+ * `hint` says where a (0-based) pin is; without it, by the clock of a round frame of `pins` pins. */
+export function sequenceRows(sequence: readonly number[], pins: number, perRow = 10, hint: (pin0: number) => string = (pin0) => clockHint(pin0, pins)): Row[] {
   const per = Math.max(1, Math.floor(perRow));
   const rows: Row[] = [];
   for (let i = 0; i < sequence.length; i += per) {
-    rows.push({ index: i + 1, pins: sequence.slice(i, i + per).map((pin) => pin + 1), clock: clockHint(sequence[i]!, pins) });
+    rows.push({ index: i + 1, pins: sequence.slice(i, i + per).map((pin) => pin + 1), clock: hint(sequence[i]!) });
   }
   return rows;
 }
@@ -139,11 +175,15 @@ export function sheetTexts(p: Project, lang: Lang, printable: (s: string) => boo
   const plans = threadPlans(p), m = materials(p), N = p.frame.pins;
   const label = (plan: ThreadPlan) => threadLabel(plan.name, plan.hex, printable);
   const minutes = Math.round(m.windingSeconds / 60), s = p.player.secondsPerLine;
+  const rect = p.frame.shape === "rect", size = frameSizeMm(p.frame), board = boardSizeMm(p.frame), hint = (pin0: number) => pinHint(p.frame, pin0, lang);
+  const mm = (v: number) => Math.round(v);
   return {
     title: t("ins.title", {}, undefined, lang),
-    subtitle: t("ins.subtitle", { d: p.frame.diameterMm, pins: N, threads: plans.length, lines: m.totalLines }, undefined, lang),
+    subtitle: rect
+      ? t("ins.subtitleRect", { w: mm(size.width), h: mm(size.height), pins: N, threads: plans.length, lines: m.totalLines }, undefined, lang)
+      : t("ins.subtitle", { d: p.frame.diameterMm, pins: N, threads: plans.length, lines: m.totalLines }, undefined, lang),
     howTitle: t("ins.howTitle", {}, undefined, lang),
-    how: t("ins.how", { pins: N }, undefined, lang),
+    how: rect ? t("ins.howRect", { pins: N }, undefined, lang) : t("ins.how", { pins: N }, undefined, lang),
     materialsTitle: t("mat.title", {}, undefined, lang),
     head: [t("mat.thread", {}, undefined, lang), t("mat.lines", {}, undefined, lang), t("mat.length", {}, undefined, lang)],
     rows: plans.map((plan) => ({ label: label(plan), hex: plan.hex, lines: String(plan.lines), length: `${metres(plan.lengthMm)} m` })),
@@ -151,7 +191,9 @@ export function sheetTexts(p: Project, lang: Lang, printable: (s: string) => boo
     total: plans.length > 1 ? { label: t("mat.total", {}, undefined, lang), lines: String(m.totalLines), length: `${plans.reduce((sum, plan) => sum + metres(plan.lengthMm), 0)} m` } : null,
     notes: [
       t("mat.nails", { n: m.nails, dia: p.frame.pinDiameterMm, len: m.nailLengthMm }, undefined, lang),
-      t("mat.board", { size: m.boardMm, d: p.frame.diameterMm, margin: BOARD_MARGIN_MM }, undefined, lang),
+      rect
+        ? t("mat.boardRect", { w: mm(board.width), h: mm(board.height), fw: mm(size.width), fh: mm(size.height), margin: BOARD_MARGIN_MM }, undefined, lang)
+        : t("mat.board", { size: m.boardMm, d: p.frame.diameterMm, margin: BOARD_MARGIN_MM }, undefined, lang),
       minutes < 60 ? t("mat.timeShort", { min: minutes, s }, undefined, lang) : t("mat.time", { h: Math.floor(minutes / 60), min: minutes % 60, s }, undefined, lang),
       t("mat.margin", { percent: Math.round(100 * THREAD_MARGIN) }, undefined, lang),
     ],
@@ -162,9 +204,9 @@ export function sheetTexts(p: Project, lang: Lang, printable: (s: string) => boo
         title,
         continued: t("ins.continued", { thread: title }, undefined, lang),
         facts: plan.lines
-          ? t("ins.facts", { start: plan.startPin + 1, startClock: clockHint(plan.startPin, N), end: plan.endPin + 1, endClock: clockHint(plan.endPin, N), lines: plan.lines, m: metres(plan.lengthMm) }, undefined, lang)
+          ? t("ins.facts", { start: plan.startPin + 1, startClock: hint(plan.startPin), end: plan.endPin + 1, endClock: hint(plan.endPin), lines: plan.lines, m: metres(plan.lengthMm) }, undefined, lang)
           : t("ins.empty", {}, undefined, lang),
-        rows: plan.lines ? sequenceRows(plan.sequence, N) : [],
+        rows: plan.lines ? sequenceRows(plan.sequence, N, 10, hint) : [],
       };
     }),
   };
@@ -222,14 +264,15 @@ function csvCell(s: string): string {
 }
 
 /** The sequences as a table (RFC 4180): a header, then one line per step with the thread's number (1-based),
- * name and colour, the step (1 = the pin the thread is tied to), the pin (1-based) and its clock hint.
+ * name and colour, the step (1 = the pin the thread is tied to), the pin (1-based) and its clock hint. For a
+ * rectangular frame the last column is `side`: T, R, B or L and the pin's number along that side.
  * Throws Error("no-result") when the project has no result. */
 export function instructionsCsv(p: Project): string {
   if (!p.result) throw new Error(NO_RESULT);
-  const lines = ["thread,name,hex,step,pin,clock"];
+  const lines = [p.frame.shape === "rect" ? "thread,name,hex,step,pin,side" : "thread,name,hex,step,pin,clock"];
   for (const plan of threadPlans(p)) {
     const head = `${plan.index + 1},${csvCell(plan.name)},${csvCell(plan.hex)},`;
-    plan.sequence.forEach((pin, i) => lines.push(`${head}${i + 1},${pin + 1},${clockHint(pin, p.frame.pins)}`));
+    plan.sequence.forEach((pin, i) => lines.push(`${head}${i + 1},${pin + 1},${pinCode(p.frame, pin)}`));
   }
   return lines.join(EOL) + EOL;
 }

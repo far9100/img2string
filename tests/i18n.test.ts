@@ -3,6 +3,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { IMPORTANCE_PRESETS } from "../src/core/project.ts";
 import zh from "../src/i18n/zh-TW.json";
 import en from "../src/i18n/en.json";
 
@@ -53,6 +54,10 @@ describe("i18n", () => {
   it("every key the page uses exists", () => {
     const missing = [...usedKeys()].filter((k) => !(k in EN) && !DYNAMIC.some((p) => k === p));
     expect(missing).toEqual([]);
+  });
+
+  it("every importance preset has a name (the names are looked up by the preset's code)", () => {
+    for (const id of IMPORTANCE_PRESETS) for (const texts of [ZH, EN]) expect(texts[`importance.${id}`], id).toBeTypeOf("string");
   });
 
   it("every key is used or built from a code", () => {

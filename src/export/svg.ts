@@ -4,7 +4,7 @@
 import { NO_RESULT, threadLabel, threadPlans } from "../core/instructions.ts";
 import type { Project } from "../core/project.ts";
 import { DEFAULT_STROKE, type PathCmd, type Prim } from "../render/prims.ts";
-import { boardSide, templateLayers, templatePins } from "../render/template.ts";
+import { boardSize, templateLayers, templatePins } from "../render/template.ts";
 
 const n = (v: number) => (Math.round(v * 1000) / 1000).toString();
 /** Text for an element or attribute. Control characters, which XML 1.0 cannot carry, are dropped (a thread's
@@ -61,8 +61,8 @@ export function svgDocument(width: number, height: number, body: readonly string
 /** The nail template: the drawing of render/template.ts in the groups "board", "frame", "marks" and "pins".
  * The group "pins" holds one <circle> per pin, in pin order, and nothing else. */
 export function templateSvg(frame: Project["frame"], title?: string): string {
-  const L = templateLayers(frame), S = boardSide(frame);
-  return svgDocument(S, S, [svgGroup("board", L.board), svgGroup("frame", L.frame), svgGroup("marks", L.marks), svgGroup("pins", L.pins)], { title });
+  const L = templateLayers(frame), { width, height } = boardSize(frame);
+  return svgDocument(width, height, [svgGroup("board", L.board), svgGroup("frame", L.frame), svgGroup("marks", L.marks), svgGroup("pins", L.pins)], { title });
 }
 
 /** The piece as vectors (§7.6): the board in its colour, then one <g> per thread in winding order (so later
@@ -70,7 +70,7 @@ export function templateSvg(frame: Project["frame"], title?: string): string {
  * ends. Same coordinates as the template. Throws Error("no-result") when the project has no result. */
 export function linesSvg(p: Project, title?: string): string {
   if (!p.result) throw new Error(NO_RESULT);
-  const S = boardSide(p.frame);
+  const { width, height } = boardSize(p.frame);
   const P = templatePins(p.frame).map(([x, y]) => [n(x), n(y)] as const);
   const groups = threadPlans(p).map((plan) => {
     const out = [`<g id="thread-${plan.index + 1}" fill="none" stroke="${esc(plan.hex)}" stroke-width="${n(p.thread.widthMm)}" stroke-linecap="butt">`, `<title>${esc(threadLabel(plan.name, plan.hex))}</title>`];
@@ -81,5 +81,5 @@ export function linesSvg(p: Project, title?: string): string {
     out.push(`</g>`);
     return out.join("\n");
   });
-  return svgDocument(S, S, groups, { title, background: p.board });
+  return svgDocument(width, height, groups, { title, background: p.board });
 }

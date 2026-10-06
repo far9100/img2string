@@ -9,7 +9,11 @@
 // One addition to §5.1, "late start" (DECISIONS D-04): a thread whose first-line search found nothing is
 // searched again when the run would otherwise stop. When every thread starts at once (both benchmarks), the
 // run is identical to generate().
-import { circDist, coverageAlpha, Model, pinPositions, rasterLine, type Options } from "./stringart.ts";
+//
+// The pins and the pairs a thread may join come from frame.ts: stringart.ts's circle and its minimum skip for a
+// round frame (so nothing here changes for one), and their like for a rectangular frame (DECISIONS D-58).
+import { allowedPairs, framePins, type FrameOptions } from "./frame.ts";
+import { coverageAlpha, Model, rasterLine } from "./stringart.ts";
 
 export interface Outcome {
   /** Why the run ended: nothing lowers the error any more, a budget ran out while lines would still help, or
@@ -32,7 +36,7 @@ export interface Extras {
 const TOUCH = 3;
 
 export class GreedyRun {
-  readonly o: Options;
+  readonly o: FrameOptions;
   readonly model: Model;
   /** One pin sequence per thread, growing as lines are added. */
   readonly seq: number[][];
@@ -44,6 +48,8 @@ export class GreedyRun {
   private readonly res: number;
   private readonly alpha: number;
   private readonly P: Float64Array;
+  /** 1 at [u * N + v] where a thread may go from pin u to pin v. */
+  private readonly ok: Uint8Array;
   private readonly limit: number;
   private readonly cur: Int32Array;
   private readonly used: Uint8Array[];
@@ -52,7 +58,7 @@ export class GreedyRun {
   private started = false;
   private finished = false;
 
-  constructor(o: Options, target: Float64Array, weight: Float64Array, resume?: readonly (readonly number[])[] | null, extras: Extras = {}) {
+  constructor(o: FrameOptions, target: Float64Array, weight: Float64Array, resume?: readonly (readonly number[])[] | null, extras: Extras = {}) {
     const N = o.pins, K = o.threads.length;
     if (o.maxLines.length !== K) throw new RangeError("one budget per thread");
     // a budget of 0 makes the reference draw a line that is not in its sequence (DECISIONS D-03)
@@ -63,7 +69,8 @@ export class GreedyRun {
     this.K = K;
     this.res = o.res;
     this.alpha = coverageAlpha(o);
-    this.P = pinPositions(N, o.res);
+    this.P = framePins(o);
+    this.ok = allowedPairs(o);
     this.limit = o.allowRepeat ? Math.min(255, extras.maxRepeat ?? 255) : 1;
     this.model = new Model(o, target, weight);
     this.initialError = this.model.error();
@@ -148,8 +155,9 @@ export class GreedyRun {
     this.lines++;
     this.valid[k]!.fill(0); // this thread moved: all its candidates are new
     // The other threads keep their current pins. A candidate chord (pin, w) changes only if it shares a pixel
-    // with the new line: the chords cross (their ends interleave around the circle), or, since chords that do
-    // not cross are closest at an endpoint, one of the four ends lies within TOUCH px of the other chord.
+    // with the new line: the chords cross (their ends interleave round the frame: the pins are numbered round
+    // a convex outline, a circle or a rectangle, so crossing chords always do), or, since chords that do not
+    // cross are closest at an endpoint, one of the four ends lies within TOUCH px of the other chord.
     const span = (v - u + N) % N;
     for (let j = 0; j < this.K; j++) {
       const pin = this.cur[j]!;
@@ -166,10 +174,10 @@ export class GreedyRun {
 
   /** The first line of thread k: the best of all pin pairs, as in generate(). */
   private first(k: number): boolean {
-    const N = this.N, minSkip = this.o.minSkip;
+    const N = this.N, ok = this.ok;
     let best = 0, bu = -1, bv = -1;
     for (let u = 0; u < N; u++) for (let v = u + 1; v < N; v++) {
-      if (circDist(u, v, N) < minSkip) continue;
+      if (!ok[u * N + v]) continue;
       const g = this.score(k, u, v);
       if (g > best) { best = g; bu = u; bv = v; }
     }
@@ -180,7 +188,7 @@ export class GreedyRun {
   }
 
   private canUse(k: number, u: number, v: number): boolean {
-    return circDist(u, v, this.N) >= this.o.minSkip && this.used[k]![this.key(u, v)]! < this.limit;
+    return this.ok[u * this.N + v] === 1 && this.used[k]![this.key(u, v)]! < this.limit;
   }
 
   /**
@@ -240,15 +248,15 @@ export class GreedyRun {
 }
 
 /** Runs to the end: generate() with the accelerations and late start. */
-export function runGreedy(o: Options, target: Float64Array, weight: Float64Array, resume?: readonly (readonly number[])[] | null, extras?: Extras): GreedyRun {
+export function runGreedy(o: FrameOptions, target: Float64Array, weight: Float64Array, resume?: readonly (readonly number[])[] | null, extras?: Extras): GreedyRun {
   const run = new GreedyRun(o, target, weight, resume, extras);
   while (run.step()) { /* one line at a time */ }
   return run;
 }
 
 /** A fresh model with the sequences wound into it: how a stored result is shown again without regenerating. */
-export function replayModel(o: Options, target: Float64Array, weight: Float64Array, sequences: readonly (readonly number[])[]): Model {
-  const m = new Model(o, target, weight), P = pinPositions(o.pins, o.res), alpha = coverageAlpha(o);
+export function replayModel(o: FrameOptions, target: Float64Array, weight: Float64Array, sequences: readonly (readonly number[])[]): Model {
+  const m = new Model(o, target, weight), P = framePins(o), alpha = coverageAlpha(o);
   sequences.forEach((s, k) => {
     for (let i = 1; i < s.length; i++) m.apply(k, rasterLine(o.res, alpha, P[2 * s[i - 1]!]!, P[2 * s[i - 1]! + 1]!, P[2 * s[i]!]!, P[2 * s[i]! + 1]!));
   });

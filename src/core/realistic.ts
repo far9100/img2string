@@ -4,7 +4,8 @@
 import { gaussianBlur } from "./image.ts";
 import { errorReduction, meanDeltaE, weightedError } from "./metrics.ts";
 import { inkOf, similarity } from "./similarity.ts";
-import { circleMask, coverageAlpha, pixelMm, type Options } from "./stringart.ts";
+import { frameMask, type FrameOptions } from "./frame.ts";
+import { coverageAlpha, pixelMm } from "./stringart.ts";
 import { renderTrueWidth, trueWidthComposite, type Region } from "./truewidth.ts";
 
 /**
@@ -13,7 +14,7 @@ import { renderTrueWidth, trueWidthComposite, type Region } from "./truewidth.ts
  * size for a viewing distance). The blur is often finer than an output pixel (0.25 mm at 2 m, while a 1,400 px
  * picture of a 500 mm frame has 0.35 mm pixels), so its weights are the Gaussian's area over each pixel.
  */
-export function viewedRender(o: Options, sequences: readonly (readonly number[])[], width: number, height: number, region: Region | null, sigmaMm: number): Float64Array {
+export function viewedRender(o: FrameOptions, sequences: readonly (readonly number[])[], width: number, height: number, region: Region | null, sigmaMm: number): Float64Array {
   const w = Math.floor(width), h = Math.floor(height);
   const img = renderTrueWidth(o, sequences, w, h, region ?? undefined);
   if (!(sigmaMm > 0) || !img.length) return img;
@@ -26,7 +27,7 @@ export function viewedRender(o: Options, sequences: readonly (readonly number[])
 /** Sub-pixels per working pixel side for the measurement: enough for a 3 sub-pixel stripe, but never more than
  * 16. A very thin thread on a large frame would otherwise ask for billions of sub-pixels, and below 3 the
  * render still gives every line its area (measured on the mono benchmark: 87.24 % at 8, 87.22 % at 16). */
-export const measureSubPixels = (o: Options): number => Math.max(1, Math.min(16, Math.ceil(3 / coverageAlpha(o))));
+export const measureSubPixels = (o: FrameOptions): number => Math.max(1, Math.min(16, Math.ceil(3 / coverageAlpha(o))));
 
 export interface TrueMeasure {
   /** Share of the bare board's weighted squared error that the piece removes, on the true-width render. */
@@ -42,13 +43,13 @@ export interface Original { reference: Float64Array; painted: Float64Array }
 
 /** The numbers of §4.5 measured on the true-width render at the working resolution instead of on the model,
  * and with `original`, how close that render is to the picture the piece was made from. */
-export function measureTrueWidth(o: Options, sequences: readonly (readonly number[])[], target: Float64Array, weight: Float64Array, original?: Original | null): TrueMeasure {
+export function measureTrueWidth(o: FrameOptions, sequences: readonly (readonly number[])[], target: Float64Array, weight: Float64Array, original?: Original | null): TrueMeasure {
   const composite = trueWidthComposite(o, sequences, measureSubPixels(o)), px = o.res * o.res;
   const bare = new Float64Array(3 * px);
   for (let p = 0; p < px; p++) bare.set(o.board, 3 * p);
   return {
     errorReduction: errorReduction(weightedError(composite, target, weight), weightedError(bare, target, weight)),
-    deltaE: meanDeltaE(composite, target, circleMask(o.res)),
+    deltaE: meanDeltaE(composite, target, frameMask(o)),
     similarity: original ? similarity(inkOf(composite, o.res, original.painted, o.board), inkOf(original.reference, o.res, original.painted, o.board)).value : null,
   };
 }

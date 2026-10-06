@@ -332,5 +332,8 @@ dialog.sheet h2 { margin: 0; font-size: 16px; }
 .player-voice .hint { margin: 0; }
 
 /* ---------- the automatic adjustment (D-55), and its advice for a picture that is mostly bare board (D-53) ---------- */
+/* a picture that is not square is offered the rectangular frame (D-58) */
+.frame-advice { margin: 4px 0 8px; }
+.frame-advice .advice { margin-top: 0; }
 .tune .blank { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
 .tune .blank .advice { margin-top: 0; }

@@ -2,6 +2,7 @@
 // A project file is read only through normalizeProject (missing fields take defaults, numbers are clamped,
 // unknown fields are dropped) and written only by serializeProject (fixed key order), so the same project is
 // always the same text. Pattern after img2shadow's core/params.ts. Extensions to §11 are in DECISIONS D-30.
+import { allowedPairs, clampAspect, pictureAspect, type FrameOptions, type FrameShape, type FrameSpec } from "./frame.ts";
 import { hexToLinear, type Options } from "./stringart.ts";
 import { isSampleId, type SampleId } from "./targets.ts";
 
@@ -20,7 +21,9 @@ export interface Adjust { brightness: number; contrast: number; gamma: number; r
  * as fractions of the picture's width and height. Later strokes paint over earlier ones. */
 export interface Stroke { w: number; r: number; pts: number[] }
 
-export const IMPORTANCE_PRESETS = ["none", "quietRim"] as const;
+/** "quietRim" is §6.5's; "centreFirst" and "centreOnly" let the outer part of the frame go for the sake of its
+ * middle (DECISIONS D-59). */
+export const IMPORTANCE_PRESETS = ["none", "quietRim", "centreFirst", "centreOnly"] as const;
 export type ImportancePreset = (typeof IMPORTANCE_PRESETS)[number];
 
 export interface ImageRef {
@@ -51,6 +54,15 @@ export interface Result {
   reason: StopReason;
 }
 
+/** The frame (§3): a circle of `diameterMm`, or a rectangle whose longer side is `diameterMm` and whose
+ * width / height is `aspect`, always the picture's (DECISIONS D-58). */
+export type Frame =
+  | { shape: "circle"; diameterMm: number; pins: number; pinDiameterMm: number }
+  | { shape: "rect"; diameterMm: number; pins: number; pinDiameterMm: number; aspect: number };
+
+/** A frame's shape for frame.ts: nothing for a circle, so that what is built from it stays as it always was. */
+export const frameSpec = (f: Frame): FrameSpec => (f.shape === "rect" ? { shape: "rect", aspect: f.aspect } : {});
+
 export interface Project {
   version: 1;
   mode: Mode;
@@ -59,7 +71,7 @@ export interface Project {
   /** `edges` (0..2) and `tone` (0..1) are the automatic emphasis of §6.5 and §13.5: more weight on the picture's
    * outlines, and on its dark parts (DECISIONS D-45, D-49). 0 is off. */
   importance: { preset: ImportancePreset; strokes: Stroke[]; edges: number; tone: number };
-  frame: { shape: "circle"; diameterMm: number; pins: number; pinDiameterMm: number };
+  frame: Frame;
   thread: { widthMm: number };
   board: string;
   threads: ThreadSpec[];
@@ -114,8 +126,9 @@ export function maxResolution(diameterMm: number, threadWidthMm: number): number
   return Math.floor((0.5 * diameterMm) / threadWidthMm) + 1;
 }
 
-/** The largest minimum skip a frame allows: §14 needs at least 2 x minSkip + 1 pins. */
-export const maxMinSkip = (pins: number): number => Math.floor((pins - 1) / 2);
+/** The largest minimum skip a frame allows: §14 needs at least 2 x minSkip + 1 pins on a circle. On a rectangle
+ * a quarter of the pins: beyond that some pins of a long frame have no pin left to go to (DECISIONS D-58). */
+export const maxMinSkip = (pins: number, shape: FrameShape = "circle"): number => (shape === "rect" ? Math.max(1, Math.floor(pins / 4)) : Math.floor((pins - 1) / 2));
 
 type Rec = Record<string, unknown>;
 const rec = (v: unknown): Rec => (v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Rec) : {});
@@ -151,9 +164,10 @@ export function normalizeProject(raw: unknown): Normalized {
   const mode: Mode = src.mode === "mono" || src.mode === "colour" ? src.mode : threadsRaw.length > 1 ? "colour" : "mono";
   const md = modeDefaults(mode);
 
-  const fr = rec(src.frame);
-  if (fr.shape !== undefined && fr.shape !== "circle") issues.add("frame-shape");
-  const frame: Project["frame"] = {
+  const fr = rec(src.frame), shape: FrameShape = fr.shape === "rect" ? "rect" : "circle";
+  if (fr.shape !== undefined && fr.shape !== "circle" && fr.shape !== "rect") issues.add("frame-shape");
+  // a rectangle's proportions are the picture's, so they are set below, once the picture is read
+  const ring: Extract<Frame, { shape: "circle" }> = {
     shape: "circle",
     diameterMm: num(fr.diameterMm, LIMITS.diameterMm[0], LIMITS.diameterMm[1], def.frame.diameterMm, "frame"),
     pins: num(fr.pins, LIMITS.pins[0], LIMITS.pins[1], md.pins, "frame", true),
@@ -174,11 +188,11 @@ export function normalizeProject(raw: unknown): Normalized {
 
   const gen = rec(src.generator);
   let res = num(gen.res, LIMITS.res[0], LIMITS.res[1], md.res, "generator", true);
-  const resCap = maxResolution(frame.diameterMm, thread.widthMm);
+  const resCap = maxResolution(ring.diameterMm, thread.widthMm);
   if (res > resCap) { res = Math.max(LIMITS.res[0], resCap); issues.add("alpha"); }
   const generator: Project["generator"] = {
     res,
-    minSkip: num(gen.minSkip, 1, maxMinSkip(frame.pins), Math.min(md.minSkip, maxMinSkip(frame.pins)), "min-skip", true),
+    minSkip: num(gen.minSkip, 1, maxMinSkip(ring.pins, shape), Math.min(md.minSkip, maxMinSkip(ring.pins, shape)), "min-skip", true),
     allowRepeat: bool(gen.allowRepeat, false),
   };
 
@@ -198,6 +212,11 @@ export function normalizeProject(raw: unknown): Normalized {
     },
     embedded: typeof im.embedded === "string" && im.embedded.startsWith("data:image/") ? im.embedded : null,
   };
+  // The rectangle follows the picture (D-58): its proportions are the picture's as it is turned, whatever the
+  // file says; a built-in sample is square; and only a picture whose size is unknown leaves the file's value.
+  const frame: Frame = shape === "rect"
+    ? { ...ring, shape: "rect", aspect: sample ? 1 : image.width > 0 && image.height > 0 ? pictureAspect(image.width, image.height, image.crop.rotateDeg) : clampAspect(fr.aspect) }
+    : ring;
 
   const ad = rec(src.adjust);
   const adjust: Adjust = {
@@ -256,12 +275,16 @@ function normalizeResult(raw: unknown, p: Project): Result | null {
   const r = rec(raw);
   if (!Array.isArray(r.sequences) || r.sequences.length !== p.threads.length) return null;
   const N = p.frame.pins, sequences: number[][] = [];
+  // on a rectangle, the pairs the generator may join (frame.ts); on a circle the minimum skip, as always
+  const ok = p.frame.shape === "rect" ? allowedPairs({ pins: N, minSkip: p.generator.minSkip, ...frameSpec(p.frame) }) : null;
   for (const s of r.sequences) {
     if (!Array.isArray(s) || s.length === 1) return null;
     for (let i = 0; i < s.length; i++) {
       const v: unknown = s[i];
       if (typeof v !== "number" || !Number.isInteger(v) || v < 0 || v >= N) return null;
-      if (i > 0) {
+      if (i > 0 && ok) {
+        if (!ok[(s[i - 1] as number) * N + v]) return null;
+      } else if (i > 0) {
         const d = Math.abs(v - (s[i - 1] as number)) % N;
         if (Math.min(d, N - d) < p.generator.minSkip) return null;
       }
@@ -300,7 +323,9 @@ export function serializeProject(p: Project): string {
       preset: p.importance.preset, edges: p.importance.edges, tone: p.importance.tone,
       strokes: p.importance.strokes.map((s) => ({ w: s.w, r: round(s.r, 5), pts: s.pts.map((v) => round(v, 5)) })),
     },
-    frame: { shape: "circle", diameterMm: p.frame.diameterMm, pins: p.frame.pins, pinDiameterMm: p.frame.pinDiameterMm },
+    frame: p.frame.shape === "rect"
+      ? { shape: "rect", diameterMm: p.frame.diameterMm, pins: p.frame.pins, pinDiameterMm: p.frame.pinDiameterMm, aspect: round(p.frame.aspect, 6) }
+      : { shape: "circle", diameterMm: p.frame.diameterMm, pins: p.frame.pins, pinDiameterMm: p.frame.pinDiameterMm },
     thread: { widthMm: p.thread.widthMm },
     board: p.board,
     threads: p.threads.map((t) => ({ name: t.name, hex: t.hex, maxLines: t.maxLines })),
@@ -324,11 +349,14 @@ export function stableStringify(v: unknown): string {
   return `{${Object.keys(o).sort().map((k) => `${JSON.stringify(k)}:${stableStringify(o[k])}`).join(",")}}`;
 }
 
-/** Everything the target picture and the importance map depend on. */
+/** Everything the target picture and the importance map depend on. A rectangular frame is part of it (the
+ * crop and the weights follow its shape); a round one adds nothing, so the keys of round pieces are what they
+ * were before there was another shape, and a stored result is still recognised by its key. */
 export function targetKey(p: Project): string {
   return stableStringify({
     mode: p.mode, sha: p.image.sha256, crop: p.image.crop, adjust: p.adjust, importance: p.importance, res: p.generator.res,
     board: p.board, threads: p.threads.map((t) => t.hex),
+    ...(p.frame.shape === "rect" ? { frame: { shape: "rect", aspect: p.frame.aspect } } : {}),
   });
 }
 
@@ -341,11 +369,12 @@ export function generationKey(p: Project): string {
   });
 }
 
-/** The §12 options of a project. */
-export function toOptions(p: Project): Options {
+/** The §12 options of a project, and for a rectangular frame its shape with them. */
+export function toOptions(p: Project): FrameOptions {
   return {
     res: p.generator.res, pins: p.frame.pins, diameterMm: p.frame.diameterMm, threadWidthMm: p.thread.widthMm,
     board: hexToLinear(p.board), threads: p.threads.map((t) => hexToLinear(t.hex)), maxLines: p.threads.map((t) => t.maxLines),
     minSkip: p.generator.minSkip, allowRepeat: p.generator.allowRepeat,
+    ...frameSpec(p.frame),
   };
 }

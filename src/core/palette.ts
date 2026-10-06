@@ -1,5 +1,6 @@
 // Palettes (spec §6.3): the presets, the default winding order, the checks of §14 that concern colours, the
 // accent colour of §9, the set-up of the winding-order search, and choosing threads for a picture.
+import type { FrameOptions } from "./frame.ts";
 import { autoPalette, type GamutSummary } from "./gamut.ts";
 import { linearToSrgb8 } from "./image.ts";
 import { maxMinSkip, maxResolution, modeDefaults, type Mode, type Project, type ThreadSpec } from "./project.ts";
@@ -39,7 +40,7 @@ export function applyPreset(p: Project, preset: Preset, name: (key: string) => s
   const threads: ThreadSpec[] = preset.threads.map((t) => ({ name: name(`thread.${t.name}`), hex: t.hex, maxLines: budget }));
   const frame = switched ? { ...p.frame, pins: d.pins } : p.frame;
   const res = switched ? Math.min(d.res, Math.max(64, maxResolution(frame.diameterMm, p.thread.widthMm))) : p.generator.res;
-  const generator = switched ? { ...p.generator, res, minSkip: Math.min(d.minSkip, maxMinSkip(frame.pins)) } : p.generator;
+  const generator = switched ? { ...p.generator, res, minSkip: Math.min(d.minSkip, maxMinSkip(frame.pins, frame.shape)) } : p.generator;
   return { ...p, mode: preset.mode, board: preset.board, threads, frame, generator };
 }
 
@@ -102,15 +103,15 @@ export const ORDER_SEARCH_VERIFY = 3;
  * same winner); with budgets cut to 300 or 150 lines the ranking is unrelated (-0.15, -0.60), so the budgets
  * are never shortened (DECISIONS D-11).
  */
-export function proxyOptions(o: Options): Options {
+export function proxyOptions<T extends FrameOptions>(o: T): T {
   const res = Math.max(32, Math.min(96, o.res, maxResolution(o.diameterMm, o.threadWidthMm)));
   const pins = Math.max(Math.min(o.pins, 48), Math.min(o.pins, 96));
-  const minSkip = Math.max(2, Math.min(maxMinSkip(pins), Math.round((o.minSkip * pins) / o.pins)));
+  const minSkip = Math.max(2, Math.min(maxMinSkip(pins, o.shape), Math.round((o.minSkip * pins) / o.pins)));
   return { ...o, res, pins, minSkip };
 }
 
 /** `o` with its threads (and their budgets) in the given order. */
-export function reorder(o: Options, order: readonly number[]): Options {
+export function reorder<T extends Options>(o: T, order: readonly number[]): T {
   return { ...o, threads: order.map((i) => o.threads[i]!), maxLines: order.map((i) => o.maxLines[i]!) };
 }
 

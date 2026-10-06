@@ -3,11 +3,15 @@
 // with the pin circle in its middle. Pin 1 is at the top and the numbers grow clockwise, as seen from the
 // front of the finished piece (§2), so the print is laid on the board face up and nailed through.
 // The drawing carries no words, only numbers: it is the same in every language. No DOM here.
-import { BOARD_MARGIN_MM } from "../core/instructions.ts";
-import type { Project } from "../core/project.ts";
+//
+// A rectangular frame (DECISIONS D-58) gets the same things in the same sizes: the board is the frame plus the
+// margin all round, the pins stand where frame.ts puts them (pin 1 next to the top left corner, numbers
+// growing clockwise), and what the round template draws along the radius is drawn at right angles to the side
+// a pin is on, out into the margin.
+import { frameSizeMm, pinSpacingMm, rectPinsMm } from "../core/frame.ts";
+import { BOARD_MARGIN_MM, boardSizeMm } from "../core/instructions.ts";
+import type { Frame } from "../core/project.ts";
 import type { Drawing, Prim, Vec } from "./prims.ts";
-
-type Frame = Project["frame"];
 
 export const TEMPLATE_INK = "#1c1d1f";
 
@@ -19,8 +23,11 @@ const DIGIT_W = 0.555, DIGIT_H = 0.733;
 const TICK_GAP = 1.6, TICK_5 = 2.5, TICK_10 = 4, CENTRE_ARM = 6, HAIR = 0.9, LEADER = 7.5, ARROW = 16;
 const NUMBER_MAX = 3, NUMBER_MIN = 1.5, ONE_SIZE = 4;
 
-/** Side of the board (D + 40 mm, §7.5), which is also the side of the drawing. */
+/** Side of the board (D + 40 mm, §7.5), which is also the side of the drawing: the longer side for a rectangle. */
 export const boardSide = (frame: Frame): number => frame.diameterMm + 2 * BOARD_MARGIN_MM;
+
+/** The board, which is also the drawing: the frame and the margin all round. A square of D + 40 mm for a circle. */
+export const boardSize = (frame: Frame): { width: number; height: number } => boardSizeMm(frame);
 
 /** Unit vector from the centre to pin i (0-based): pin 0 points up and the angle grows clockwise on a y-down
  * page, exactly as pinPositions() of the core places the pins on the working grid (§3). */
@@ -31,6 +38,10 @@ function pinDir(i: number, pins: number): Vec {
 
 /** Centre of every pin in the drawing's coordinates (mm), for tests and for the DXF. */
 export function templatePins(frame: Frame): [number, number][] {
+  if (frame.shape === "rect") {
+    const { at } = rectPinsMm(frame);
+    return Array.from({ length: frame.pins }, (_, i): [number, number] => [BOARD_MARGIN_MM + at[2 * i]!, BOARD_MARGIN_MM + at[2 * i + 1]!]);
+  }
   const c = boardSide(frame) / 2, r = frame.diameterMm / 2;
   return Array.from({ length: frame.pins }, (_, i): [number, number] => {
     const [ux, uy] = pinDir(i, frame.pins);
@@ -43,7 +54,7 @@ export function templatePins(frame: Frame): [number, number][] {
 export interface TemplateLayers {
   /** The board's outline: a square of D + 40 mm, which is also the drawing's edge. */
   board: Prim[];
-  /** The pin circle. */
+  /** The pin circle, or the rectangle the pins stand on. */
   frame: Prim[];
   /** Everything that is only read: ticks, numbers, the arrow at pin 1, the centre cross, a cross-hair per pin. */
   marks: Prim[];
@@ -51,7 +62,53 @@ export interface TemplateLayers {
   pins: Prim[];
 }
 
+/** Unit vectors out of a rectangular frame at its top, right, bottom and left side (y points down). */
+const OUTWARD: readonly Vec[] = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+
+function rectLayers(frame: Frame): TemplateLayers {
+  const { width: w, height: h } = frameSizeMm(frame), M = BOARD_MARGIN_MM, W = w + 2 * M, H = h + 2 * M, N = frame.pins, pr = frame.pinDiameterMm / 2;
+  const ink = TEMPLATE_INK, { at, side } = rectPinsMm(frame);
+  const board: Prim[] = [{ t: "poly", pts: [[0, 0], [W, 0], [W, H], [0, H]], stroke: ink, width: 0.4 }];
+  const outline: Prim[] = [{ t: "poly", pts: [[M, M], [M + w, M], [M + w, M + h], [M, M + h]], stroke: ink, width: 0.15 }];
+  const marks: Prim[] = [
+    { t: "line", a: [W / 2 - CENTRE_ARM, H / 2], b: [W / 2 + CENTRE_ARM, H / 2], stroke: ink, width: 0.25 },
+    { t: "line", a: [W / 2, H / 2 - CENTRE_ARM], b: [W / 2, H / 2 + CENTRE_ARM], stroke: ink, width: 0.25 },
+  ];
+  const pins: Prim[] = [];
+
+  // Numbers shrink on crowded frames so that neighbours, five pins apart, never touch.
+  const size = Math.min(NUMBER_MAX, Math.max(NUMBER_MIN, 0.45 * 5 * pinSpacingMm(frame).along));
+  const base = pr + TICK_GAP, numbers = base + TICK_10 + 0.8;
+  for (let i = 0; i < N; i++) {
+    const x = M + at[2 * i]!, y = M + at[2 * i + 1]!, [ox, oy] = OUTWARD[side[i]!]!;
+    const out = (d: number): Vec => [x + d * ox, y + d * oy];
+    pins.push({ t: "circle", c: [x, y], r: pr, stroke: ink, width: 0.2 });
+    // the nail goes where this hair crosses the frame's line
+    marks.push({ t: "line", a: out(-pr - HAIR), b: out(pr + HAIR), stroke: ink, width: 0.15 });
+    const n = i + 1; // the number people see (§2)
+    if (n % 5) continue;
+    const ten = n % 10 === 0;
+    marks.push({ t: "line", a: out(base), b: out(base + (ten ? TICK_10 : TICK_5)), stroke: ink, width: ten ? 0.6 : 0.25 });
+    // upright text, pushed out by its own half-extent: half its height above and below, half its width beside
+    const label = String(n), tw = label.length * DIGIT_W * size, th = DIGIT_H * size;
+    const [lx, ly] = out(numbers + (Math.abs(ox) * tw + Math.abs(oy) * th) / 2);
+    marks.push({ t: "text", at: [lx, ly + th / 2], text: label, size, color: ink, align: "center", bold: ten });
+  }
+
+  // Pin 1, next to the top left corner: a long leader, a large "1" above it, and an arrow along the top side to
+  // the right, which is clockwise. The arrow runs at the number's mid height, above the small numbers.
+  const x1 = M + at[0]!, y1 = M + at[1]!, top = base + LEADER, h1 = DIGIT_H * ONE_SIZE, w1 = DIGIT_W * ONE_SIZE;
+  marks.push({ t: "line", a: [x1, y1 - base], b: [x1, y1 - top], stroke: ink, width: 0.6 });
+  marks.push({ t: "text", at: [x1, y1 - top - 0.9], text: "1", size: ONE_SIZE, color: ink, align: "center", bold: true });
+  const ya = y1 - top - 0.9 - h1 / 2, xa = x1 + w1 / 2 + 1.8, xb = xa + ARROW;
+  marks.push({ t: "path", d: [{ c: "M", p: [xa, ya] }, { c: "L", p: [xb, ya] }], stroke: ink, width: 0.4 });
+  marks.push({ t: "poly", pts: [[xb + 2.8, ya], [xb, ya + 1.1], [xb, ya - 1.1]], fill: ink });
+
+  return { board, frame: outline, marks, pins };
+}
+
 export function templateLayers(frame: Frame): TemplateLayers {
+  if (frame.shape === "rect") return rectLayers(frame);
   const N = frame.pins, S = boardSide(frame), c = S / 2, r = frame.diameterMm / 2, pr = frame.pinDiameterMm / 2;
   const ink = TEMPLATE_INK;
   const at = (i: number, radius: number): Vec => {
@@ -108,6 +165,6 @@ export function templateLayers(frame: Frame): TemplateLayers {
  * the top with a clockwise arrow, a centre mark, and the board outline (a square of D + 40 mm). Numbers sit
  * outside the circle. */
 export function templateDrawing(frame: Frame): Drawing {
-  const L = templateLayers(frame), S = boardSide(frame);
-  return { width: S, height: S, prims: [...L.board, ...L.frame, ...L.marks, ...L.pins] };
+  const L = templateLayers(frame), { width, height } = boardSize(frame);
+  return { width, height, prims: [...L.board, ...L.frame, ...L.marks, ...L.pins] };
 }

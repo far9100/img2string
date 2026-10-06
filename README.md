@@ -12,7 +12,8 @@
 
 ## English
 
-img2string works out how to wind thread around pins on a circular frame so that,
+img2string works out how to wind thread around pins on a frame, round or
+rectangular, so that,
 from a normal viewing distance, the threads reproduce a picture: one continuous
 thread for a black-and-white piece, or one continuous thread per colour. It
 shows what the finished piece will look like and makes everything needed to
@@ -40,8 +41,9 @@ or a phone. There is nothing to download or install.
 1. **Upload picture** (or drop it on the page, or paste it), or try a sample.
    Drag the picture to place it inside the pin ring; scroll or pinch to zoom.
 2. Choose the colours: **One colour** or **Several colours**, a palette, the
-   board colour and the winding order. Set the frame's diameter, the number
-   of pins (64 to 512) and the thread width.
+   board colour and the winding order. Choose the frame: round, or a
+   rectangle with the picture's proportions. Set its size, the number of pins
+   (64 to 512) and the thread width.
 3. Optionally, **Find the settings closest to the picture** sets the
    adjustment sliders for you.
 4. **Generate**. Lines appear while it works; **Stop** keeps what is there,
@@ -121,6 +123,22 @@ Three facts explain what comes out:
   twelve test line drawings from 42 % to 56 % (median), and with a white
   thread wound last to 72 %. It takes ten seconds to a minute, and changes
   nothing but those sliders.
+- **A rectangular frame** shows the whole picture. Hardly any picture is
+  round: a circle shows 59 % of a 4:3 picture at most, and the page says so
+  when a picture is not square, with **Use a rectangular frame** beside it.
+  The rectangle always has the picture's proportions; you set its longer
+  side. Pin 1 is next to the top left corner and the numbers run clockwise.
+  On eight line drawings the round piece, laid back on the whole picture, is
+  44 % like it; the rectangular one 52 %. The shape of the frame does not
+  make a piece better where both show the picture: a line still crosses all
+  of it. What does is pins inside the picture, which this page does not do
+  (DECISIONS D-57).
+- **Centre first** and **Centre only** (under *What matters most*) let the
+  outer part of the frame go for the sake of its middle. With Centre only
+  the outer third does not count at all and comes out as a tangle; on the
+  same drawings the middle rises from 56.5 % to 63.5 % like the picture, with
+  a third fewer lines. Centre first keeps a faint outer part: 61.5 %. The
+  brush can make any place count again.
 - **Can these threads make the picture's colours?** With several colours, the
   page hatches the parts of the picture whose colour the board and the threads
   cannot mix, names the colour that is missing most and offers to add a thread
@@ -204,7 +222,7 @@ font: [docs/third_party.md](docs/third_party.md).
 
 ## 繁體中文
 
-img2string 會算出線要怎麼繞在圓框的釘子上，讓人從正常的觀看距離看過去時，線條重現一張圖：黑白作品用一條不間斷的線，彩色作品每個顏色一條。它會顯示成品的樣子，並做出手作需要的一切：原寸列印的釘位模板、繞線順序、逐步播放器，以及線長。它在你的瀏覽器裡執行，圖片不會上傳。
+img2string 會算出線要怎麼繞在框上的釘子之間（圓框或長方框），讓人從正常的觀看距離看過去時，線條重現一張圖：黑白作品用一條不間斷的線，彩色作品每個顏色一條。它會顯示成品的樣子，並做出手作需要的一切：原寸列印的釘位模板、繞線順序、逐步播放器，以及線長。它在你的瀏覽器裡執行，圖片不會上傳。
 
 ```
 第 1 / 1 條線 · 黑 (#111111)
@@ -222,7 +240,7 @@ img2string 會算出線要怎麼繞在圓框的釘子上，讓人從正常的觀
 用瀏覽器打開 **<https://far9100.github.io/img2string/>** 就能用，電腦或手機都可以，不需要下載或安裝。
 
 1. 按〔上傳圖片〕（也可以把圖拖進頁面或直接貼上），或先試內建範例。拖曳圖片把它擺進釘環，滾輪或雙指可以縮放。
-2. 選顏色：〔單色〕或〔多色〕、調色盤、板子顏色與繞線順序。設定圓框直徑、釘數（64 到 512）與線寬。
+2. 選顏色：〔單色〕或〔多色〕、調色盤、板子顏色與繞線順序。選框形：圓形，或長寬比跟著圖片的長方形。設定框的大小、釘數（64 到 512）與線寬。
 3. 需要的話，按〔找出最接近原圖的數值〕，讓程式替你設定調整圖片的滑桿。
 4. 按〔生成〕。計算時線條會逐步出現；按〔停止〕會保留目前的結果，按〔繼續〕可以接著算。
 5. 用〔真實線寬〕、〔觀看距離〕、和圖片並排，或用〔放大鏡〕檢查結果。
@@ -252,6 +270,8 @@ img2string 把每個線色看成一層不透明、只蓋住每個像素一部分
 ### 讓成品更好的工具
 
 - **找出最接近原圖的數值**：〔調整圖片〕的滑桿和下面兩個「強調」不必自己試。程式會試大約四十組數值，每一組都實際算出繞線結果、以真實線寬畫出來，和「還沒做任何調整的原圖」比較，留下最像的一組，並告訴你有多像。臉部範例的相似度從 41% 升到 50%；十二張測試線稿從 42% 升到 56%（中位數），再加一條最後繞的白線則到 72%。需要十幾秒到一分鐘，而且只會動那些滑桿。
+- **長方框**看得到整張圖。幾乎沒有圖片是圓的：4:3 的圖放進圓框，最多只看得到 59%；圖片不是正方形時，頁面會說出這個數字，旁邊就是〔改用長方框〕。長方框的長寬比永遠跟著圖片，你只設定長邊。1 號釘在左上角旁邊，順時針編號。8 張測試線稿上，把圓框的成品放回整張圖上比，相似度是 44%，長方框是 52%。在兩種框都看得到的地方，框的形狀不會讓成品更像，因為每條線還是橫越整個畫面；會讓它更像的是釘在畫面裡面的釘子，這個頁面沒有做（DECISIONS D-57）。
+- **中央優先**與**只管中央**（在〔哪裡比較重要〕裡）為了中央而放掉框的外圈。〔只管中央〕完全不管外面三分之一，那裡會是亂的；同樣那些線稿，中央和原圖的相似度從 56.5% 升到 63.5%，線還少了三分之一。〔中央優先〕留下淡淡的外圈：61.5%。筆刷可以把任何地方塗回重要。
 - **這些線混得出圖片的顏色嗎**：多色時，頁面會在圖片上用斜線標出板子和線混不出來的地方，說出最缺的是哪個顏色，並可以直接加一條那個顏色的線。色環範例配青、洋紅、黃、黑時，約有 60% 的面積混不出來；加一條綠線就降到三分之一。
 - **讓圖片決定線色**：依圖片選出最多六條線，可以從任何顏色裡選，也可以只從你自己的線色清單裡選。
 - **強調輪廓**與**強調深色細節**：由圖片本身決定哪裡比較重要。後者是拿均勻換對比：開到最強時，臉部範例的對比從原圖的四成左右升到六成左右，但淺色的地方會偏灰，線也多用四成五。兩者預設都是關的。

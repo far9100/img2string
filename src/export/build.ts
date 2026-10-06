@@ -2,9 +2,9 @@
 // builds. Pure functions of the project, so the tests build the same files in Node.
 // The two PDF writers are imported only when a PDF is asked for: pdf-lib and fontkit stay out of whatever
 // loads this module for an SVG or a CSV.
-import { instructionsCsv, instructionsTxt, NO_RESULT } from "../core/instructions.ts";
+import { instructionsCsv, instructionsTxt, NO_RESULT, templateTitle } from "../core/instructions.ts";
 import type { Project } from "../core/project.ts";
-import { t, type Lang } from "../i18n/translate.ts";
+import type { Lang } from "../i18n/translate.ts";
 import { templateDxf } from "./dxf.ts";
 import { FILE } from "./names.ts";
 import { linesSvg, templateSvg } from "./svg.ts";
@@ -50,8 +50,7 @@ export async function buildFile(font: Uint8Array | null, input: ExportInput, kin
       return { name: FILE.template(stem, "pdf"), mime: "application/pdf", bytes: await templatePdf(font!, project, lang) };
     }
     case "template-svg": {
-      const title = t("tpl.title", { d: project.frame.diameterMm, pins: project.frame.pins }, undefined, lang);
-      return { name: FILE.template(stem, "svg"), mime: "image/svg+xml", bytes: utf8(templateSvg(project.frame, title)) };
+      return { name: FILE.template(stem, "svg"), mime: "image/svg+xml", bytes: utf8(templateSvg(project.frame, templateTitle(project.frame, lang))) };
     }
     case "template-dxf":
       return { name: FILE.template(stem, "dxf"), mime: "image/vnd.dxf", bytes: utf8(templateDxf(project.frame)) };

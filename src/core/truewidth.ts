@@ -7,7 +7,8 @@
 // thread on top there (0 = bare board), so painting a stripe is writing its label and "opaque, in winding
 // order" is painting layer 0 first. Only a band of rows is held at a time; its output pixels are the mean
 // colour of their S x S sub-pixels.
-import { coverageAlpha, pinPositions, type Options } from "./stringart.ts";
+import { framePins, type FrameOptions } from "./frame.ts";
+import { coverageAlpha } from "./stringart.ts";
 
 /** A rectangle in working-grid coordinates (pixel centres at whole numbers; may be fractional). */
 export interface Region { x0: number; y0: number; x1: number; y1: number }
@@ -37,11 +38,11 @@ const wholeGrid = (res: number): Region => ({ x0: -0.5, y0: -0.5, x1: res - 0.5,
  * in none, so there the number of sub-pixels in a column is the rounded running total of 2e less what the
  * columns before it got, placed nearest the line: the area is right for every line, whatever its direction.
  */
-function render(o: Options, sequences: readonly (readonly number[])[], width: number, height: number, region: Region, S: number): Float64Array {
+function render(o: FrameOptions, sequences: readonly (readonly number[])[], width: number, height: number, region: Region, S: number): Float64Array {
   const K = o.threads.length;
   if (K > 255) throw new RangeError(`the true-width render labels threads with one byte: 255 threads at most, got ${K}`);
   const gw = width * S, gh = height * S, sx = gw / (region.x1 - region.x0), sy = gh / (region.y1 - region.y0);
-  const alpha = coverageAlpha(o), P = pinPositions(o.pins, o.res);
+  const alpha = coverageAlpha(o), P = framePins(o);
   const thin = alpha * Math.min(Math.abs(sx), Math.abs(sy)) < MIN_STRIPE * (1 - 1e-9);
 
   // every line once, in sub-pixel coordinates along its major (a) and minor (b) axis, in winding order
@@ -158,7 +159,7 @@ function render(o: Options, sequences: readonly (readonly number[])[], width: nu
  * at least 3 sub-pixels wide (16 for 0.25 mm thread on 500 mm at 400 px). The work grows with
  * (res x subPixels)^2, about (3 x diameter / thread width)^2 sub-pixels by default; the memory does not.
  */
-export function trueWidthComposite(o: Options, sequences: readonly (readonly number[])[], subPixels?: number): Float64Array {
+export function trueWidthComposite(o: FrameOptions, sequences: readonly (readonly number[])[], subPixels?: number): Float64Array {
   let S = subPixels === undefined ? Math.ceil(MIN_STRIPE / coverageAlpha(o)) : Math.floor(subPixels);
   if (!(S >= 1 && Number.isFinite(S))) S = 1;
   return render(o, sequences, o.res, o.res, wholeGrid(o.res), S);
@@ -173,7 +174,7 @@ export function trueWidthComposite(o: Options, sequences: readonly (readonly num
  * for thin stripes keeps every line's area right. `width` and `height` are rounded down to whole pixels.
  * At res x res for the whole grid, when the cap does not bind, this is trueWidthComposite.
  */
-export function renderTrueWidth(o: Options, sequences: readonly (readonly number[])[], width: number, height: number, region?: Region): Float64Array {
+export function renderTrueWidth(o: FrameOptions, sequences: readonly (readonly number[])[], width: number, height: number, region?: Region): Float64Array {
   const w = Math.floor(width), h = Math.floor(height), view = region ?? wholeGrid(o.res);
   if (!(w >= 1 && h >= 1)) return new Float64Array(0);
   // the stripe's width in output pixels, along the axis where it is narrower

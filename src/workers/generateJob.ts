@@ -7,7 +7,8 @@ import { GreedyRun } from "../core/greedy.ts";
 import { toRgba8 } from "../core/image.ts";
 import { meanDeltaE, meanDeltaEFlat } from "../core/metrics.ts";
 import { MAX_REPEAT } from "../core/project.ts";
-import { circleMask, generate } from "../core/stringart.ts";
+import { frameMask } from "../core/frame.ts";
+import { generate } from "../core/stringart.ts";
 import type { FromGen, ToGen } from "./protocol.ts";
 
 export interface JobPort {
@@ -37,7 +38,7 @@ export function createGenerateJob(port: JobPort): (msg: ToGen) => void {
     const t0 = port.now();
     try {
       const run = new GreedyRun(msg.options, msg.target, msg.weight, msg.resume, REPEATS);
-      const res = msg.options.res, mask = circleMask(res);
+      const res = msg.options.res, mask = frameMask(msg.options);
       const sent = run.seq.map((s) => s.length); // what the page already has (the resumed part)
       const tail = (): Int32Array => {
         const pairs: number[] = [];

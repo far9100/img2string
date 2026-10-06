@@ -5,7 +5,8 @@
 import type { Controller } from "../app/controller.ts";
 import type { AppState } from "../app/state.ts";
 import { accentFor, textOn } from "../core/palette.ts";
-import { pinPositions } from "../core/stringart.ts";
+import { frameBounds, framePins, pinPlace, type Side } from "../core/frame.ts";
+import { frameSpec } from "../core/project.ts";
 import { getLang, t } from "../i18n/i18n.ts";
 import { fitCanvas, themeColour, themeHex } from "../ui/canvasUtil.ts";
 import { button, checkField, h, tx } from "../ui/dom.ts";
@@ -14,6 +15,10 @@ import { createSpeaker } from "./voice.ts";
 
 /** Whether to read the pins aloud is remembered on this device (a device has voices or it has not). */
 const VOICE_KEY = "img2string.voice";
+
+/** Where the next pin is on a rectangular frame: its side, and its number along it counted the way the pins
+ * are numbered (DECISIONS D-58). A round frame says it by the clock. */
+const SIDE_TEXT: Record<Side, string> = { top: "player.sideTop", right: "player.sideRight", bottom: "player.sideBottom", left: "player.sideLeft" };
 
 export interface PlayerView {
   open(): void;
@@ -104,13 +109,17 @@ export function mountPlayer(ctl: Controller): PlayerView {
   function drawMap(s: AppState, position: number): void {
     const made = s.made;
     if (!made?.result || !plan) return;
-    const css = 280, dpr = fitCanvas(map, css), ctx = map.getContext("2d")!, res = 1000, P = pinPositions(made.frame.pins, res), k = (css * dpr) / res * 0.94, off = css * dpr * 0.03;
+    const css = 280, dpr = fitCanvas(map, css), ctx = map.getContext("2d")!, res = 1000, layout = { pins: made.frame.pins, res, ...frameSpec(made.frame) };
+    const P = framePins(layout), k = (css * dpr) / res * 0.94, off = css * dpr * 0.03;
     const at = (pinIndex: number): [number, number] => [off + P[2 * pinIndex]! * k, off + P[2 * pinIndex + 1]! * k];
     ctx.clearRect(0, 0, map.width, map.height);
     ctx.strokeStyle = themeColour("--line-strong");
     ctx.lineWidth = dpr;
     ctx.beginPath();
-    ctx.arc(off + (res - 1) / 2 * k, off + (res - 1) / 2 * k, (res - 1) / 2 * k, 0, 2 * Math.PI);
+    if (made.frame.shape === "rect") {
+      const b = frameBounds(layout);
+      ctx.rect(off + b.x0 * k, off + b.y0 * k, (b.x1 - b.x0) * k, (b.y1 - b.y0) * k);
+    } else ctx.arc(off + (res - 1) / 2 * k, off + (res - 1) / 2 * k, (res - 1) / 2 * k, 0, 2 * Math.PI);
     ctx.stroke();
     // the last lines wound of the thread in hand, fading, then the line to wind now
     const current = plan.steps[Math.min(position, plan.steps.length - 1)];
@@ -159,7 +168,8 @@ export function mountPlayer(ctl: Controller): PlayerView {
     label.hidden = v.done;
     pin.textContent = v.done ? t("player.done") : String(v.nextPin);
     pin.classList.toggle("done", v.done);
-    clock.textContent = v.done ? "" : t("player.clock", { clock: v.nextClock });
+    const place = v.done ? null : pinPlace({ pins: made.frame.pins, ...frameSpec(made.frame) }, v.nextPin - 1);
+    clock.textContent = v.done ? "" : place ? t(SIDE_TEXT[place.side], { n: place.n, of: place.of }) : t("player.clock", { clock: v.nextClock });
     note.textContent = v.done ? t("player.tieOff") : v.tieOn ? (v.thread > 0 ? t("player.changeThread", { pin: v.fromPin, name: thread?.name ?? "" }) : t("player.tieOn", { pin: v.fromPin })) : t("player.from", { pin: v.fromPin });
     then.textContent = v.thenPin ? t("player.then", { pin: v.thenPin }) : "";
     bar.value = v.total ? v.position / v.total : 0;

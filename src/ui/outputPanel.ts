@@ -1,8 +1,8 @@
 // The right column, step 3 "Result & Make" (spec §7): downloads, the materials list, the winding player's
 // launcher, and the project file.
 import type { Controller } from "../app/controller.ts";
-import { materials } from "../core/instructions.ts";
-import { PAPERS } from "../core/project.ts";
+import { boardSizeMm, materials } from "../core/instructions.ts";
+import { PAPERS, type Frame } from "../core/project.ts";
 import type { ExportKind } from "../export/build.ts";
 import { t } from "../i18n/i18n.ts";
 import { hoursMinutes, stepAt } from "../player/player.ts";
@@ -65,6 +65,12 @@ export function mountOutputPanel(root: HTMLElement, ctl: Controller, syncs: Sync
     ),
   );
 
+  /** The board a frame needs: "540 mm square", or both sides of a rectangular frame's. */
+  const boardText = (frame: Frame): string => {
+    const board = boardSizeMm(frame);
+    return frame.shape === "rect" ? t("out.boardRect", { w: Math.round(board.width), h: Math.round(board.height) }) : t("out.boardValue", { mm: board.width });
+  };
+
   syncs.push((s) => {
     const made = s.made, has = !!made?.result && made.result.lines.some((n) => n > 0), busy = s.busyExport;
     paper.set(s.project.paper);
@@ -92,14 +98,14 @@ export function mountOutputPanel(root: HTMLElement, ctl: Controller, syncs: Sync
       rows.push(
         h("tr", { class: "total" }, h("th", { scope: "row", text: t("out.total") }), h("td", { text: t("out.lineCount", { n: m.totalLines }) }), h("td", { text: `${Math.ceil(m.totalLengthM)} m` })),
         h("tr", null, h("th", { scope: "row", text: t("out.nails") }), h("td", { colspan: 2, text: t("out.nailsValue", { n: m.nails, mm: m.nailLengthMm }) })),
-        h("tr", null, h("th", { scope: "row", text: t("out.board") }), h("td", { colspan: 2, text: t("out.boardValue", { mm: m.boardMm }) })),
+        h("tr", null, h("th", { scope: "row", text: t("out.board") }), h("td", { colspan: 2, text: boardText(made!.frame) })),
         h("tr", null, h("th", { scope: "row", text: t("out.time") }), h("td", { colspan: 2, text: t("out.timeValue", { h: time.h, min: time.min }) })),
       );
     } else {
       const frame = s.project.frame;
       rows.push(
         h("tr", null, h("th", { scope: "row", text: t("out.nails") }), h("td", { colspan: 2, text: t("out.nailsValue", { n: frame.pins, mm: frame.pinDiameterMm <= 2 ? 25 : 30 }) })),
-        h("tr", null, h("th", { scope: "row", text: t("out.board") }), h("td", { colspan: 2, text: t("out.boardValue", { mm: frame.diameterMm + 40 }) })),
+        h("tr", null, h("th", { scope: "row", text: t("out.board") }), h("td", { colspan: 2, text: boardText(frame) })),
       );
     }
     list.replaceChildren(h("tbody", null, ...rows));

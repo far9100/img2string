@@ -1,8 +1,9 @@
 // The stepper makes the reference's choices (so its accelerations are exact), can be stopped and continued
 // from the sequences alone, and adds "late start" (DECISIONS D-04) without touching runs that do not need it.
 import { describe, expect, it } from "vitest";
+import { allowedPairs, frameBounds, frameMask, framePins, type FrameOptions } from "../../src/core/frame.ts";
 import { GreedyRun, replayModel, runGreedy } from "../../src/core/greedy.ts";
-import { circDist, circleMask, generate, hexToLinear, type Options, type RGB } from "../../src/core/stringart.ts";
+import { circDist, circleMask, coverageAlpha, generate, hexToLinear, Model, rasterLine, type Options, type RGB } from "../../src/core/stringart.ts";
 import { blobs, discAndBar } from "../helpers/pictures.ts";
 import { mulberry32 } from "../helpers/rng.ts";
 
@@ -77,6 +78,108 @@ describe("GreedyRun against generate()", () => {
       expect(rest.seq, `continued at line ${at}`).toEqual(whole.seq);
       expect(rest.error()).toBe(whole.error());
     }
+  });
+});
+
+/** generate() of stringart.ts for any frame: every candidate scored afresh at every step, nothing remembered. */
+function plainSearch(o: FrameOptions, target: Float64Array, weight: Float64Array, maxRepeat = 255): { sequences: number[][]; error: number } {
+  const N = o.pins, P = framePins(o), ok = allowedPairs(o), alpha = coverageAlpha(o), model = new Model(o, target, weight), limit = o.allowRepeat ? maxRepeat : 1;
+  const line = (u: number, v: number) => rasterLine(o.res, alpha, P[2 * u]!, P[2 * u + 1]!, P[2 * v]!, P[2 * v + 1]!);
+  const key = (u: number, v: number) => (u < v ? u * N + v : v * N + u);
+  const seq: number[][] = o.threads.map(() => []), used = o.threads.map(() => new Map<number, number>()), cur: number[] = [];
+  const draw = (k: number, u: number, v: number) => { model.apply(k, line(u, v)); seq[k]!.push(v); used[k]!.set(key(u, v), (used[k]!.get(key(u, v)) ?? 0) + 1); cur[k] = v; };
+  for (let k = 0; k < o.threads.length; k++) {
+    let best = 0, bu = -1, bv = -1;
+    for (let u = 0; u < N; u++) for (let v = u + 1; v < N; v++) {
+      if (!ok[u * N + v]) continue;
+      const g = model.gain(k, line(u, v));
+      if (g > best) { best = g; bu = u; bv = v; }
+    }
+    cur.push(bu);
+    if (bu >= 0) { seq[k]!.push(bu); draw(k, bu, bv); }
+  }
+  for (;;) {
+    let best = 0, bk = -1, bv = -1;
+    for (let k = 0; k < o.threads.length; k++) {
+      const u = cur[k]!;
+      if (u < 0 || seq[k]!.length - 1 >= o.maxLines[k]!) continue;
+      for (let v = 0; v < N; v++) {
+        if (!ok[u * N + v] || (used[k]!.get(key(u, v)) ?? 0) >= limit) continue;
+        const g = model.gain(k, line(u, v));
+        if (g > best) { best = g; bk = k; bv = v; }
+      }
+    }
+    if (bk < 0) break;
+    draw(bk, cur[bk]!, bv);
+  }
+  return { sequences: seq, error: model.error() };
+}
+
+describe("GreedyRun on a rectangular frame (DECISIONS D-58)", () => {
+  const rect = (aspect: number, over: Partial<FrameOptions> = {}): FrameOptions => ({ ...base(over), shape: "rect", aspect });
+
+  it("on the round frame the plain search is generate(), so it can stand in for it", () => {
+    const o = base({ threads: PALETTE.slice(1), maxLines: [70, 70, 70] }), T = blobs(o.res, 3), W = circleMask(o.res), ref = generate(o, T, W), plain = plainSearch(o, T, W);
+    expect(plain.sequences).toEqual(ref.sequences);
+    expect(plain.error).toBe(ref.error);
+  });
+
+  it("draws the lines a plain search draws, for 1 to 4 threads: what it remembers between steps is exact", { timeout: 240_000 }, () => {
+    let compared = 0, lines = 0;
+    for (const [aspect, pins, res, minSkip] of [[0.75, 72, 96, 6], [1.5, 96, 120, 8], [1, 80, 110, 7], [0.4, 128, 120, 10], [2.5, 64, 100, 5], [4, 96, 110, 4]] as const) {
+      for (const K of [1, 2, 3, 4]) for (const repeat of [false, true]) {
+        const seed = Math.round(100 * aspect) + 10 * K + (repeat ? 1 : 0), r = mulberry32(seed);
+        const o = rect(aspect, { pins, res, minSkip, threads: PALETTE.slice(4 - K), maxLines: Array.from({ length: K }, () => 120 + Math.floor(r() * 120)), allowRepeat: repeat, threadWidthMm: 0.6 });
+        const T = blobs(res, 200 + seed), W = frameMask(o);
+        if (seed % 2) for (let p = 0; p < W.length; p++) if (W[p]) W[p] = r() < 0.2 ? 0.2 : r() < 0.2 ? 3 : 1;
+        const plain = plainSearch(o, T, W, 3);
+        if (plain.sequences.some((s) => s.length === 0)) continue; // late start: see below
+        const run = runGreedy(o, T, W, null, { maxRepeat: 3 });
+        expect(run.seq, `aspect ${aspect}, ${K} threads, repeat ${repeat}`).toEqual(plain.sequences);
+        expect(run.error()).toBe(plain.error);
+        compared++;
+        lines += run.lines;
+      }
+    }
+    expect(compared).toBeGreaterThanOrEqual(40);
+    expect(lines).toBeGreaterThan(10_000);
+  });
+
+  it("joins only pins the frame allows, never two on one side, and stays inside the frame", () => {
+    const o = rect(0.75, { pins: 96, res: 120, minSkip: 8, maxLines: [300] }), T = discAndBar(o.res), W = frameMask(o), ok = allowedPairs(o), P = framePins(o);
+    const run = runGreedy(o, T, W), s = run.seq[0]!;
+    expect(s.length - 1).toBeGreaterThan(100);
+    for (let i = 1; i < s.length; i++) {
+      expect(ok[s[i - 1]! * o.pins + s[i]!]).toBe(1);
+      expect(circDist(s[i - 1]!, s[i]!, o.pins)).toBeGreaterThanOrEqual(o.minSkip);
+    }
+    // nothing is drawn beside the frame: a pixel away from its outline (a line is two pixels wide) the composite
+    // is still the board
+    const C = run.model.C, b = frameBounds(o);
+    let bare = 0;
+    for (let y = 0; y < o.res; y++) for (let x = 0; x < o.res; x++) {
+      if (x >= b.x0 - 1 && x <= b.x1 + 1) continue;
+      const p = y * o.res + x;
+      expect(W[p]).toBe(0);
+      expect(C[3 * p]! + C[3 * p + 1]! + C[3 * p + 2]!).toBe(3);
+      bare++;
+    }
+    expect(bare).toBeGreaterThan(0.2 * o.res * o.res);
+    expect(Math.max(...P)).toBeLessThanOrEqual(o.res - 1);
+    expect(run.error()).toBeLessThan(0.5 * run.initialError);
+  });
+
+  it("stopped and continued from its sequences, ends where an uninterrupted run ends", () => {
+    const o = rect(1.5, { pins: 96, res: 120, minSkip: 8, threads: PALETTE.slice(2), maxLines: [90, 90] }), T = blobs(o.res, 9), W = frameMask(o);
+    const whole = runGreedy(o, T, W);
+    for (const steps of [1, 40, 120]) {
+      const part = new GreedyRun(o, T, W);
+      for (let i = 0; i < steps && part.step(); i++) { /* stop here */ }
+      const rest = runGreedy(o, T, W, JSON.parse(JSON.stringify(part.seq)) as number[][]);
+      expect(rest.seq, `stopped after ${steps} steps`).toEqual(whole.seq);
+      expect(rest.error()).toBe(whole.error());
+    }
+    expect(replayModel(o, T, W, whole.seq).error()).toBe(whole.error());
   });
 });
 

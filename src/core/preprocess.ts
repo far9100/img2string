@@ -3,14 +3,16 @@
 // and in the Node tests. Targets are linear RGB, 3 values per pixel, row-major (see strokes.ts for coordinates).
 import { gaussianBlur, SRGB_TO_LINEAR } from "./image.ts";
 import { NEUTRAL_ADJUST, type Adjust, type Crop, type ImportancePreset, type Mode, type Stroke } from "./project.ts";
-import { circleMask, linearToSrgb, oklab, srgbToLinear, type RGB } from "./stringart.ts";
+import { cropSpan, frameBounds, frameMask, framePixels, isRect, type FrameSpec } from "./frame.ts";
+import { linearToSrgb, oklab, srgbToLinear, type RGB } from "./stringart.ts";
 import { cropTransform, paintStrokes } from "./strokes.ts";
 
 /** A decoded picture: sRGB bytes with straight alpha, 4 per pixel, row 0 at the top. */
 export interface Source { width: number; height: number; rgba: Uint8Array | Uint8ClampedArray }
 
-/** The picture seen through a crop and laid on the board: 3 * res * res linear RGB. */
-export type Cropper = (crop: Crop, res: number, board: RGB) => Float64Array;
+/** The picture seen through a crop and laid on the board: 3 * res * res linear RGB. `span` is cropTransform's:
+ * the picture's short side unless the frame is not round. */
+export type Cropper = (crop: Crop, res: number, board: RGB, span?: number) => Float64Array;
 
 /** The picture shrunk by a whole factor: linear RGBA with the colour already multiplied by alpha. */
 interface Level { n: number; w: number; h: number; data: Float64Array }
@@ -66,8 +68,8 @@ export function makeCropper(source: Source): Cropper {
   const { width, height, rgba } = source;
   if (rgba.length < 4 * width * height) throw new RangeError(`a ${width} x ${height} picture needs ${4 * width * height} bytes, got ${rgba.length}`);
   let level: Level | null = null;
-  return (crop, res, board) => {
-    const t = cropTransform(crop, width, height, res), out = new Float64Array(3 * res * res);
+  return (crop, res, board, span) => {
+    const t = cropTransform(crop, width, height, res, span), out = new Float64Array(3 * res * res);
     let n = Math.floor(t.k + SNAP);
     if (!(n >= 1)) n = 1;
     n = Math.min(n, Math.max(1, width, height));
@@ -112,6 +114,34 @@ export function makeCropper(source: Source): Cropper {
     }
     return out;
   };
+}
+
+/**
+ * The picture as a frame shows it: through the crop at the frame's span and, for a rectangular frame, carried
+ * on beside the frame by repeating its outermost pixels. Beside a rectangle the grid would otherwise show the
+ * board (or whatever of the picture lies there), right against pixels that count; the sharpening and the edge
+ * emphasis look a few pixels around, and would take the frame's own outline for an edge in the picture
+ * (DECISIONS D-58). A round frame is unchanged: its outline was never the picture's edge.
+ */
+export function cropForFrame(cropper: Cropper, crop: Crop, res: number, board: RGB, width: number, height: number, frame: FrameSpec = {}): Float64Array {
+  const picture = cropper(crop, res, board, cropSpan(frame, crop.rotateDeg, width, height, res));
+  return isRect(frame) ? padBesideFrame(picture, res, frame) : picture;
+}
+
+/** Every pixel beside a rectangular frame takes the colour of the nearest pixel inside it. In place. */
+export function padBesideFrame(picture: Float64Array, res: number, frame: FrameSpec): Float64Array {
+  const b = framePixels({ res, ...frame });
+  for (let y = 0; y < res; y++) {
+    const sy = Math.min(b.y1, Math.max(b.y0, y));
+    for (let x = 0; x < res; x++) {
+      if (x >= b.x0 && x <= b.x1 && y === sy) continue;
+      const sx = Math.min(b.x1, Math.max(b.x0, x)), p = 3 * (y * res + x), q = 3 * (sy * res + sx);
+      picture[p] = picture[q]!;
+      picture[p + 1] = picture[q + 1]!;
+      picture[p + 2] = picture[q + 2]!;
+    }
+  }
+  return picture;
 }
 
 export interface Palette { mode: Mode; board: RGB; threads: readonly RGB[] }
@@ -220,20 +250,43 @@ export function blankShare(picture: Float64Array, weight: ArrayLike<number>, boa
 
 /** The "quiet rim" preset of §6.5 (D-14): this weight where the distance from the centre is above this share of the radius. */
 export const QUIET_RIM = { radius: 0.82, weight: 0.2 } as const;
+/**
+ * The two presets that let the outer part of the frame go (D-59): beyond this share of the radius the weight
+ * is `first` ("centreFirst": it still counts, for a tenth) or `only` ("centreOnly": it does not count, and the
+ * lines may do there what they like). The middle is 4/9 of the frame. On eight line drawings the middle's
+ * similarity to the picture went from 57.8 % to 62.3 % and 64.6 %, the outer part's from 54.5 % to 39.6 % and 18.0 %.
+ */
+export const CENTRE_ZONE = { radius: 2 / 3, first: 0.1, only: 0 } as const;
+
+/** Beyond which share of the frame's half-size a preset sets which weight. */
+function presetZone(preset: ImportancePreset): { radius: number; weight: number } | null {
+  if (preset === "quietRim") return QUIET_RIM;
+  if (preset === "centreFirst") return { radius: CENTRE_ZONE.radius, weight: CENTRE_ZONE.first };
+  if (preset === "centreOnly") return { radius: CENTRE_ZONE.radius, weight: CENTRE_ZONE.only };
+  return null;
+}
 
 /**
- * The weight map W of §4.5: 1 everywhere, lowered on the rim by the preset, then the brush strokes (a stroke
- * replaces what is under it, the preset included), then 0 outside the pin circle, exactly as circleMask does.
+ * The weight map W of §4.5: 1 everywhere, lowered towards the frame by the preset, then the brush strokes (a
+ * stroke replaces what is under it, the preset included), then 0 outside the frame, exactly as its mask does.
  * `width` and `height` are the picture's, for placing the strokes through the crop.
+ *
+ * "Beyond a share of the frame's half-size" is the distance from the centre on a round frame, compared in
+ * squared pixels as §6.5's quiet rim always was. On a rectangular frame it is the larger of the two shares
+ * along its sides, so the middle is a rectangle of the frame's proportions and the same part of its area.
  */
-export function importanceWeights(res: number, preset: ImportancePreset, strokes: readonly Stroke[], crop: Crop, width: number, height: number): Float64Array {
+export function importanceWeights(res: number, preset: ImportancePreset, strokes: readonly Stroke[], crop: Crop, width: number, height: number, frame: FrameSpec = {}): Float64Array {
   let W: Float64Array = new Float64Array(res * res).fill(1);
-  if (preset === "quietRim") {
-    const c = (res - 1) / 2, rim = (QUIET_RIM.radius * c) ** 2;
-    for (let y = 0; y < res; y++) for (let x = 0; x < res; x++) if ((x - c) ** 2 + (y - c) ** 2 > rim) W[y * res + x] = QUIET_RIM.weight;
+  const zone = presetZone(preset), c = (res - 1) / 2;
+  if (zone && !isRect(frame)) {
+    const rim = (zone.radius * c) ** 2;
+    for (let y = 0; y < res; y++) for (let x = 0; x < res; x++) if ((x - c) ** 2 + (y - c) ** 2 > rim) W[y * res + x] = zone.weight;
+  } else if (zone) {
+    const b = frameBounds({ res, ...frame }), across = (zone.radius * (b.x1 - b.x0)) / 2, down = (zone.radius * (b.y1 - b.y0)) / 2;
+    for (let y = 0; y < res; y++) for (let x = 0; x < res; x++) if (Math.abs(x - c) > across || Math.abs(y - c) > down) W[y * res + x] = zone.weight;
   }
-  if (strokes.length) W = paintStrokes(W, res, strokes, crop, width, height);
-  const mask = circleMask(res);
+  if (strokes.length) W = paintStrokes(W, res, strokes, crop, width, height, cropSpan(frame, crop.rotateDeg, width, height, res));
+  const mask = frameMask({ res, ...frame });
   for (let p = 0; p < W.length; p++) W[p]! *= mask[p]!;
   return W;
 }

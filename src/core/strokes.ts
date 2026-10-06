@@ -27,28 +27,31 @@ export interface CropTransform {
  * pixel is short / (scale (res - 1)) picture pixels. A positive rotateDeg turns the picture clockwise on screen
  * (y points down). Whole quarter turns use exact sines and cosines: turning a picture by 90 degrees then only
  * moves its pixels, it does not resample them. Needs res >= 2.
+ *
+ * `span` is the picture pixels across the working grid at scale 1. It is the short side unless the frame is
+ * not round: cropSpan() of frame.ts gives it for any frame (DECISIONS D-58).
  */
-export function cropTransform(crop: Crop, width: number, height: number, res: number): CropTransform {
+export function cropTransform(crop: Crop, width: number, height: number, res: number, span: number = Math.min(width, height)): CropTransform {
   const quarter = (((crop.rotateDeg % 360) + 360) % 360) / 90, exact = Number.isInteger(quarter), t = (crop.rotateDeg * Math.PI) / 180;
   return {
     c: (res - 1) / 2,
     x0: crop.cx * width,
     y0: crop.cy * height,
-    k: Math.min(width, height) / (crop.scale * (res - 1)),
+    k: span / (crop.scale * (res - 1)),
     cos: exact ? [1, 0, -1, 0][quarter]! : Math.cos(t),
     sin: exact ? [0, 1, 0, -1][quarter]! : Math.sin(t),
   };
 }
 
 /** Working-grid pixel coordinates -> picture point (fractions of the width and the height). */
-export function gridToPicture(crop: Crop, width: number, height: number, res: number, x: number, y: number): [number, number] {
-  const t = cropTransform(crop, width, height, res), dx = x - t.c, dy = y - t.c;
+export function gridToPicture(crop: Crop, width: number, height: number, res: number, x: number, y: number, span?: number): [number, number] {
+  const t = cropTransform(crop, width, height, res, span), dx = x - t.c, dy = y - t.c;
   return [(t.x0 + t.k * (dx * t.cos + dy * t.sin)) / width, (t.y0 + t.k * (dy * t.cos - dx * t.sin)) / height];
 }
 
 /** Picture point (fractions of the width and the height) -> working-grid pixel coordinates: the inverse of gridToPicture. */
-export function pictureToGrid(crop: Crop, width: number, height: number, res: number, sx: number, sy: number): [number, number] {
-  const t = cropTransform(crop, width, height, res), px = sx * width - t.x0, py = sy * height - t.y0;
+export function pictureToGrid(crop: Crop, width: number, height: number, res: number, sx: number, sy: number, span?: number): [number, number] {
+  const t = cropTransform(crop, width, height, res, span), px = sx * width - t.x0, py = sy * height - t.y0;
   return [t.c + (px * t.cos - py * t.sin) / t.k, t.c + (px * t.sin + py * t.cos) / t.k];
 }
 
@@ -58,10 +61,10 @@ export function pictureToGrid(crop: Crop, width: number, height: number, res: nu
  * each segment; a single point gives a disc), so a later stroke replaces an earlier one where they overlap.
  * The radius is a fraction of the picture's short side and so scales with the picture when the crop zooms.
  */
-export function paintStrokes(base: Float64Array, res: number, strokes: readonly Stroke[], crop: Crop, width: number, height: number): Float64Array {
+export function paintStrokes(base: Float64Array, res: number, strokes: readonly Stroke[], crop: Crop, width: number, height: number, span?: number): Float64Array {
   const out = base.slice();
   if (!strokes.length) return out;
-  const t = cropTransform(crop, width, height, res), short = Math.min(width, height);
+  const t = cropTransform(crop, width, height, res, span), short = Math.min(width, height);
   for (const s of strokes) {
     const points = s.pts.length >> 1, rad = (s.r * short) / t.k, r2 = rad * rad;
     let ax = 0, ay = 0;

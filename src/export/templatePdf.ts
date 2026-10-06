@@ -5,7 +5,8 @@
 import type { Paper, Project } from "../core/project.ts";
 import { t, type Lang } from "../i18n/translate.ts";
 import { DEFAULT_STROKE, primBox, type Prim } from "../render/prims.ts";
-import { boardSide, templateDrawing, TEMPLATE_INK } from "../render/template.ts";
+import { templateTitle } from "../core/instructions.ts";
+import { boardSize, templateDrawing, TEMPLATE_INK } from "../render/template.ts";
 import { addPage, clipRect, drawPrims, newDoc, save, textWidthMm } from "./pdfKit.ts";
 import { planTiles, type Tile, type TilePlan } from "./tiles.ts";
 
@@ -27,8 +28,8 @@ const BAND_SIDE = 118;
 
 /** The pages of the template on the given paper (also what the page count shown beside the download is). */
 export function templatePlan(frame: Project["frame"], paper: Paper): TilePlan {
-  const S = boardSide(frame);
-  return planTiles(S, S, paper, PRINTER_MARGIN, OVERLAP);
+  const { width, height } = boardSize(frame);
+  return planTiles(width, height, paper, PRINTER_MARGIN, OVERLAP);
 }
 
 /** Where the drawing's origin lands on a tile's page (mm from the page's top-left corner). */
@@ -197,7 +198,7 @@ export function bandTexts(frame: Project["frame"], plan: TilePlan, index: number
   const n = plan.tiles.length, tile = plan.tiles[index]!;
   const print = t("pdf.printActual", {}, undefined, lang);
   return {
-    title: t("tpl.title", { d: frame.diameterMm, pins: frame.pins }, undefined, lang),
+    title: templateTitle(frame, lang),
     page: n > 1 ? t("pdf.tile", { p: index + 1, n, row: tile.row + 1, col: tile.col + 1 }, undefined, lang) : t("pdf.page", { p: 1, n: 1 }, undefined, lang),
     note: n > 1 ? `${print} ${t("tpl.join", {}, undefined, lang)}` : print,
   };
@@ -206,7 +207,7 @@ export function bandTexts(frame: Project["frame"], plan: TilePlan, index: number
 export async function templatePdf(fontBytes: Uint8Array, project: Project, lang: Lang): Promise<Uint8Array> {
   const frame = project.frame;
   const drawing = templateDrawing(frame), plan = templatePlan(frame, project.paper);
-  const { doc, font } = await newDoc(fontBytes, t("tpl.title", { d: frame.diameterMm, pins: frame.pins }, undefined, lang), lang);
+  const { doc, font } = await newDoc(fontBytes, templateTitle(frame, lang), lang);
   const prims = [...drawing.prims, ...markPrims(stripMarks(plan, drawing.width, drawing.height, drawing.prims))];
   const boxes = prims.map(primBox);
   plan.tiles.forEach((tile, index) => {

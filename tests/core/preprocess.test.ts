@@ -1,7 +1,11 @@
 // src/core/preprocess.ts: the crop onto the working grid, the adjustments of §6.4 and the importance map of §6.5.
 import { describe, expect, it } from "vitest";
 import { gaussianBlur, SRGB_TO_LINEAR } from "../../src/core/image.ts";
-import { adjustTarget, BLANK_DELTA, blankShare, importanceWeights, makeCropper, MOSTLY_BLANK, QUIET_RIM, referencePicture, type Palette, type Source } from "../../src/core/preprocess.ts";
+import { cropSpan, frameBounds, frameMask, framePixels, pictureAspect } from "../../src/core/frame.ts";
+import {
+  adjustTarget, BLANK_DELTA, blankShare, CENTRE_ZONE, cropForFrame, importanceWeights, makeCropper, MOSTLY_BLANK, padBesideFrame, QUIET_RIM, referencePicture,
+  type Palette, type Source,
+} from "../../src/core/preprocess.ts";
 import { IDENTITY_CROP, NEUTRAL_ADJUST, type Adjust, type Crop } from "../../src/core/project.ts";
 import { circleMask, hexToLinear, linearToSrgb, srgbToLinear, type RGB } from "../../src/core/stringart.ts";
 import { pictureToGrid } from "../../src/core/strokes.ts";
@@ -472,6 +476,52 @@ describe("importanceWeights", () => {
     expect(QUIET_RIM).toEqual({ radius: 0.82, weight: 0.2 });
   });
 
+  it("quiet rim marks the same pixels at every resolution as it always did", () => {
+    // The rule as it was first written, in squared pixels. At some resolutions pixels sit exactly on the rim,
+    // and another way of writing "beyond 82 % of the radius" puts them on the other side (DECISIONS D-58).
+    for (const res of [101, 201, 301, 400, 501, 601, 1001]) {
+      const W = importanceWeights(res, "quietRim", [], IDENTITY_CROP, res, res), c = (res - 1) / 2, rim = (0.82 * c) ** 2, r2 = c ** 2;
+      let differ = 0;
+      for (let y = 0; y < res; y++) for (let x = 0; x < res; x++) {
+        const d2 = (x - c) ** 2 + (y - c) ** 2, was = d2 <= r2 ? (d2 > rim ? 0.2 : 1) : 0;
+        if (W[y * res + x] !== was) differ++;
+      }
+      expect(differ, `res ${res}`).toBe(0);
+    }
+  });
+
+  it("centre first and centre only: beyond two thirds of the radius the weight is a tenth, or nothing (DECISIONS D-59)", () => {
+    expect(CENTRE_ZONE).toEqual({ radius: 2 / 3, first: 0.1, only: 0 });
+    for (const [preset, outer] of [["centreFirst", 0.1], ["centreOnly", 0]] as const) for (const res of [101, 400]) {
+      const W = importanceWeights(res, preset, [], IDENTITY_CROP, res, res), mask = circleMask(res), c = (res - 1) / 2, edge = ((2 / 3) * c) ** 2;
+      let middle = 0, disc = 0;
+      for (let y = 0; y < res; y++) for (let x = 0; x < res; x++) {
+        const p = y * res + x;
+        expect(W[p]).toBe(mask[p] === 0 ? 0 : (x - c) ** 2 + (y - c) ** 2 > edge ? outer : 1);
+        disc += mask[p]!;
+        if (W[p] === 1) middle++;
+      }
+      expect(Math.abs(middle / disc - 4 / 9)).toBeLessThan(0.01); // the middle is 4/9 of the disc
+    }
+  });
+
+  it("with centre only, the brush makes a place count again and what does not count is not measured", () => {
+    const res = 200, c = (res - 1) / 2, stroke = { w: 2, r: 0.04, pts: [0.5, 0.08] }; // a dab near the top, in the outer part
+    const plain = importanceWeights(res, "centreOnly", [], IDENTITY_CROP, res, res), W = importanceWeights(res, "centreOnly", [stroke], IDENTITY_CROP, res, res);
+    const at = Math.round(0.08 * res) * res + Math.round(c);
+    expect([plain[at], W[at]]).toEqual([0, 2]);
+    expect(W.filter((v) => v === 2).length).toBeGreaterThan(100);
+    // a picture that is blank in the middle and black round it: all blank to centre only, mostly not to no preset
+    const picture = new Float64Array(3 * res * res).fill(1);
+    for (let y = 0; y < res; y++) for (let x = 0; x < res; x++) if (Math.hypot(x - c, y - c) > 0.7 * c) picture.fill(0, 3 * (y * res + x), 3 * (y * res + x) + 3);
+    expect(blankShare(picture, plain, [1, 1, 1])).toBe(1);
+    expect(blankShare(picture, importanceWeights(res, "none", [], IDENTITY_CROP, res, res), [1, 1, 1])).toBeCloseTo(0.49, 1);
+    // centre first still looks at the outer part, for a tenth: 0.49 blank of weight 1 against 0.51 of weight 0.1 ...
+    const first = blankShare(picture, importanceWeights(res, "centreFirst", [], IDENTITY_CROP, res, res), [1, 1, 1]);
+    expect(first).toBeGreaterThan(0.85);
+    expect(first).toBeLessThan(1);
+  });
+
   it("strokes replace what is under them, the preset included, and nothing is painted outside the circle", () => {
     const res = 200, width = 300, height = 200, crop: Crop = { cx: 0.5, cy: 0.5, scale: 1.2, rotateDeg: 25 }, mask = circleMask(res);
     const plain = importanceWeights(res, "quietRim", [], crop, width, height);
@@ -497,6 +547,105 @@ describe("importanceWeights", () => {
     // the same strokes without the preset differ only where the rim was lowered
     const none = importanceWeights(res, "none", strokes, crop, width, height);
     for (let p = 0; p < res * res; p++) expect(none[p]).toBe(W[p] === 0.2 ? 1 : W[p]);
+  });
+});
+
+describe("the picture and the weights in a rectangular frame (DECISIONS D-58)", () => {
+  const white: RGB = [1, 1, 1];
+  /** A picture of one colour, or whatever `paint` makes of pixel (x, y): sRGB bytes. */
+  const picture = (width: number, height: number, paint: (x: number, y: number) => number): Source => {
+    const rgba = new Uint8Array(4 * width * height);
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) { const q = 4 * (y * width + x), v = paint(x, y); rgba[q] = rgba[q + 1] = rgba[q + 2] = v; rgba[q + 3] = 255; }
+    return { width, height, rgba };
+  };
+
+  it("an upright picture fills its frame: no board shows in it, and beside it the picture is carried on", () => {
+    for (const [width, height, res] of [[300, 400, 200], [640, 360, 240], [500, 500, 150]] as const) {
+      const source = picture(width, height, () => 90), frame = { shape: "rect" as const, aspect: pictureAspect(width, height) };
+      const out = cropForFrame(makeCropper(source), IDENTITY_CROP, res, white, width, height, frame), grey = SRGB_TO_LINEAR[90]!;
+      // the whole grid is the picture's grey: in the frame because the picture covers it with a pixel to spare,
+      // beside it because the frame's outermost pixels are repeated there
+      let worst = 0;
+      for (let i = 0; i < out.length; i++) worst = Math.max(worst, Math.abs(out[i]! - grey));
+      expect(worst, `${width} x ${height}`).toBeLessThan(1e-12);
+      // without the spare pixel and the padding, the board would begin right beside the frame: an edge that the
+      // sharpening and the edge emphasis, which look a few pixels around, would take for part of the picture
+      const plain = makeCropper(source)(IDENTITY_CROP, res, white, Math.max(width, height)), b = framePixels({ res, ...frame }), mid = Math.floor(res / 2);
+      const beside = width < height ? plain[3 * (mid * res + b.x0 - 1)]! : width > height ? plain[3 * ((b.y0 - 1) * res + mid)]! : 1;
+      expect(beside).toBeGreaterThan(grey + 0.5);
+    }
+  });
+
+  it("the frame shows the whole picture: its four quarters are where they belong", () => {
+    const width = 300, height = 400, res = 200, frame = { shape: "rect" as const, aspect: pictureAspect(width, height) };
+    // top left black, top right dark, bottom left light, bottom right white
+    const source = picture(width, height, (x, y) => (y < height / 2 ? (x < width / 2 ? 0 : 80) : x < width / 2 ? 170 : 255));
+    const out = cropForFrame(makeCropper(source), IDENTITY_CROP, res, white, width, height, frame), b = frameBounds({ res, ...frame });
+    const at = (u: number, v: number) => out[3 * (Math.round(b.y0 + v * (b.y1 - b.y0)) * res + Math.round(b.x0 + u * (b.x1 - b.x0)))]!;
+    expect([at(0.02, 0.02), at(0.98, 0.02), at(0.02, 0.98), at(0.98, 0.98)].map((v) => Math.round(255 * linearToSrgb(v)))).toEqual([0, 80, 170, 255]);
+    // the quarters meet in the middle of the frame, to within a few pixels
+    expect(Math.round(255 * linearToSrgb(at(0.48, 0.25)))).toBe(0);
+    expect(Math.round(255 * linearToSrgb(at(0.52, 0.25)))).toBe(80);
+    expect(Math.round(255 * linearToSrgb(at(0.25, 0.48)))).toBe(0);
+    expect(Math.round(255 * linearToSrgb(at(0.25, 0.52)))).toBe(170);
+  });
+
+  it("turned a quarter, the picture still fills the frame, which has turned with it; turned a little, it is enlarged to fill it", () => {
+    const width = 300, height = 400, res = 200, source = picture(width, height, (x, y) => (x < 40 && y < 40 ? 0 : 120));
+    for (const rotateDeg of [90, -90, 180, 7, -33]) {
+      const frame = { shape: "rect" as const, aspect: pictureAspect(width, height, rotateDeg) }, crop = { ...IDENTITY_CROP, rotateDeg };
+      const out = cropForFrame(makeCropper(source), crop, res, white, width, height, frame), b = framePixels({ res, ...frame });
+      let bright = 0;
+      for (let y = b.y0; y <= b.y1; y++) for (let x = b.x0; x <= b.x1; x++) if (out[3 * (y * res + x)]! > 0.9) bright++;
+      expect(bright, `turned ${rotateDeg}`).toBe(0); // no board anywhere in the frame
+      expect(frame.aspect).toBeCloseTo(Math.abs(rotateDeg) === 90 ? 400 / 300 : 300 / 400, 12);
+      if (rotateDeg === 90) {
+        // clockwise: the picture's top left corner is now the frame's top right
+        const dark = (x: number, y: number) => out[3 * (y * res + x)]! < 0.05;
+        expect(dark(b.x1 - 3, b.y0 + 3)).toBe(true);
+        expect(dark(b.x0 + 3, b.y0 + 3)).toBe(false);
+      }
+    }
+  });
+
+  it("padBesideFrame repeats the frame's outermost pixels and leaves the inside alone", () => {
+    const res = 60, frame = { shape: "rect" as const, aspect: 0.5 }, r = mulberry32(12), before = new Float64Array(3 * res * res).map(() => r());
+    const after = padBesideFrame(before.slice(), res, frame), b = framePixels({ res, ...frame });
+    expect(b.x1 - b.x0 + 1).toBeLessThan(res / 2 + 2);
+    for (let y = 0; y < res; y++) for (let x = 0; x < res; x++) {
+      const sx = Math.min(b.x1, Math.max(b.x0, x)), sy = Math.min(b.y1, Math.max(b.y0, y));
+      for (let k = 0; k < 3; k++) expect(after[3 * (y * res + x) + k]).toBe(before[3 * (sy * res + sx) + k]);
+    }
+  });
+
+  it("the weights are the frame's mask, and the presets lower what is beyond a share of its half-width or half-height", () => {
+    for (const aspect of [0.75, 1.6]) for (const res of [200, 401]) {
+      const frame = { shape: "rect" as const, aspect }, mask = frameMask({ res, ...frame }), b = frameBounds({ res, ...frame }), c = (res - 1) / 2;
+      expect(importanceWeights(res, "none", [], IDENTITY_CROP, 640, 480, frame)).toEqual(mask);
+      for (const [preset, share, outer] of [["quietRim", 0.82, 0.2], ["centreFirst", 2 / 3, 0.1], ["centreOnly", 2 / 3, 0]] as const) {
+        const W = importanceWeights(res, preset, [], IDENTITY_CROP, 640, 480, frame);
+        let middle = 0, inside = 0;
+        for (let y = 0; y < res; y++) for (let x = 0; x < res; x++) {
+          const p = y * res + x, beyond = Math.abs(x - c) > (share * (b.x1 - b.x0)) / 2 || Math.abs(y - c) > (share * (b.y1 - b.y0)) / 2;
+          expect(W[p]).toBe(mask[p] === 0 ? 0 : beyond ? outer : 1);
+          inside += mask[p]!;
+          if (W[p] === 1) middle++;
+        }
+        // the middle is a rectangle of the frame's proportions: the same share of the frame as on the circle
+        expect(Math.abs(middle / inside - share * share)).toBeLessThan(0.02);
+      }
+    }
+  });
+
+  it("a brush stroke lands on its place in the picture, through the frame's own span", () => {
+    const width = 300, height = 400, res = 200, crop: Crop = { cx: 0.45, cy: 0.55, scale: 1.3, rotateDeg: 0 }, frame = { shape: "rect" as const, aspect: pictureAspect(width, height) };
+    const strokes = [{ w: 3, r: 0.05, pts: [0.5, 0.5] }, { w: 2, r: 0.03, pts: [0.3, 0.7, 0.4, 0.7] }];
+    const W = importanceWeights(res, "none", strokes, crop, width, height, frame), span = cropSpan(frame, 0, width, height, res);
+    const at = (sx: number, sy: number) => { const [x, y] = pictureToGrid(crop, width, height, res, sx, sy, span); return W[Math.round(y) * res + Math.round(x)]; };
+    expect([at(0.5, 0.5), at(0.35, 0.7), at(0.7, 0.3)]).toEqual([3, 2, 1]);
+    // the round frame's span would put the strokes somewhere else
+    const [x, y] = pictureToGrid(crop, width, height, res, 0.35, 0.7);
+    expect(W[Math.round(y) * res + Math.round(x)]).not.toBe(2);
   });
 });
 

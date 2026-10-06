@@ -1,7 +1,7 @@
 {
   "name": "img2string",
   "version": "0.1.0",
-  "description": "Turn a picture into string art: one continuous thread per colour around pins on a circular frame, with a nail template, winding instructions and a step-by-step player.",
+  "description": "Turn a picture into string art: one continuous thread per colour around pins on a round or rectangular frame, with a nail template, winding instructions and a step-by-step player.",
   "license": "GPL-3.0-or-later",
   "private": true,
   "type": "module",

@@ -4,7 +4,8 @@
 // comparison with the target and the magnifier of §7.1).
 import type { Controller } from "../app/controller.ts";
 import type { AppState, Compare } from "../app/state.ts";
-import { IDENTITY_CROP, type Crop } from "../core/project.ts";
+import { cropSpan, frameBounds, framePins } from "../core/frame.ts";
+import { frameSpec, IDENTITY_CROP, type Crop } from "../core/project.ts";
 import { gridToPicture } from "../core/strokes.ts";
 import { viewingSigmaMm } from "../core/truewidth.ts";
 import { t } from "../i18n/i18n.ts";
@@ -60,9 +61,11 @@ export function mountStage(root: HTMLElement, ctl: Controller, syncs: Sync[]): v
     if (side(s)) { const size = Math.min(max, cssW / 2 - 4); return [cssW - size, 0, size]; }
     return [(cssW - max) / 2, 0, max];
   };
-  const sourceShape = (s: AppState): { crop: Crop; width: number; height: number } => {
+  /** The picture and how the frame sees it: `span` is cropTransform's, the picture's short side for a round frame. */
+  const sourceShape = (s: AppState): { crop: Crop; width: number; height: number; span: number } => {
     const res = s.project.generator.res, src = s.source;
-    return src && !src.sample ? { crop: s.project.image.crop, width: src.width, height: src.height } : { crop: IDENTITY_CROP, width: res, height: res };
+    const shape = src && !src.sample ? { crop: s.project.image.crop, width: src.width, height: src.height } : { crop: IDENTITY_CROP, width: res, height: res };
+    return { ...shape, span: cropSpan(frameSpec(s.project.frame), shape.crop.rotateDeg, shape.width, shape.height, res) };
   };
 
   function drawImage(ctx: CanvasRenderingContext2D, slot: string, rgba: Uint8ClampedArray, w: number, h: number, x: number, y: number, size: number, dpr: number): void {
@@ -71,21 +74,46 @@ export function mountStage(root: HTMLElement, ctl: Controller, syncs: Sync[]): v
     ctx.drawImage(rgbaCanvas(slot, rgba, w, h), x * dpr, y * dpr, size * dpr, size * dpr);
   }
 
-  /** The pin ring over a picture: the circle and a tick per pin. */
+  /** Clears what lies beside a rectangular frame in the square a picture was drawn in: the working grid is
+   * square and the frame is not, and what the grid holds beside it (the picture carried on for the sake of
+   * the sharpening, or bare board) is not part of the piece. A round frame keeps its corners, as it always did. */
+  function trim(ctx: CanvasRenderingContext2D, frame: AppState["project"]["frame"], res: number, x: number, y: number, size: number, dpr: number): void {
+    if (frame.shape !== "rect" || res < 2) return;
+    const b = frameBounds({ res, ...frameSpec(frame) }), k = (size * dpr) / res, left = x * dpr, top = y * dpr, side = size * dpr;
+    const x0 = left + b.x0 * k, x1 = left + (b.x1 + 1) * k, y0 = top + b.y0 * k, y1 = top + (b.y1 + 1) * k;
+    ctx.clearRect(left, top, x0 - left, side);
+    ctx.clearRect(x1, top, left + side - x1, side);
+    ctx.clearRect(left, top, side, y0 - top);
+    ctx.clearRect(left, y1, side, top + side - y1);
+  }
+
+  /** The frame over a picture: its outline (the pin circle, or the rectangle) and a tick per pin, pointing
+   * away from the picture. The pins are frame.ts's, as the generator has them: a working pixel (gx, gy) is
+   * drawn at ((gx + 0.5) / res, (gy + 0.5) / res) of the square the piece takes on the canvas. */
   function ring(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, dpr: number, pins: number): void {
-    const cx = (x + size / 2) * dpr, cy = (y + size / 2) * dpr, r = (size / 2) * dpr * (1 - 1 / Math.max(2, ctl.state.project.generator.res));
+    const frame = ctl.state.project.frame, res = Math.max(2, ctl.state.project.generator.res), layout = { pins, res, ...frameSpec(frame) };
+    const k = (size * dpr) / res, at = (g: number, origin: number) => origin * dpr + (g + 0.5) * k;
+    const P = framePins(layout), b = frameBounds(layout), cx = at((res - 1) / 2, x), cy = at((res - 1) / 2, y), rect = frame.shape === "rect";
     ctx.save();
     ctx.strokeStyle = themeColour("--ring");
     ctx.lineWidth = dpr;
     ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, 2 * Math.PI);
+    if (rect) ctx.rect(at(b.x0, x), at(b.y0, y), (b.x1 - b.x0) * k, (b.y1 - b.y0) * k);
+    else ctx.arc(cx, cy, ((res - 1) / 2) * k, 0, 2 * Math.PI);
     ctx.stroke();
     ctx.beginPath();
     const step = pins > 256 ? 2 : 1;
     for (let i = 0; i < pins; i += step) {
-      const a = -Math.PI / 2 + (2 * Math.PI * i) / pins, long = i % 10 === 0 ? 7 : 3.5;
-      ctx.moveTo(cx + r * Math.cos(a), cy + r * Math.sin(a));
-      ctx.lineTo(cx + (r + long * dpr) * Math.cos(a), cy + (r + long * dpr) * Math.sin(a));
+      const px = at(P[2 * i]!, x), py = at(P[2 * i + 1]!, y), long = (i % 10 === 0 ? 7 : 3.5) * dpr;
+      // outwards: along the radius of a circle, at right angles to the side of a rectangle
+      let ox = px - cx, oy = py - cy;
+      if (rect) {
+        const gx = P[2 * i]!, gy = P[2 * i + 1]!, near = Math.min(gy - b.y0, b.x1 - gx, b.y1 - gy, gx - b.x0);
+        [ox, oy] = near === gy - b.y0 ? [0, -1] : near === b.x1 - gx ? [1, 0] : near === b.y1 - gy ? [0, 1] : [-1, 0];
+      }
+      const length = Math.hypot(ox, oy) || 1;
+      ctx.moveTo(px, py);
+      ctx.lineTo(px + (long * ox) / length, py + (long * oy) / length);
     }
     ctx.stroke();
     ctx.restore();
@@ -119,6 +147,7 @@ export function mountStage(root: HTMLElement, ctl: Controller, syncs: Sync[]): v
         // §6.3: the parts whose colour these threads cannot mix, hatched (not while painting importance)
         if (s.view.gamut && s.target.gamutRgba && s.project.mode === "colour" && !s.view.brush.on) drawImage(ctx, "gamut", s.target.gamutRgba, s.target.res, s.target.res, fx, fy, size, dpr);
         drawImage(ctx, "weights", s.target.weightRgba, s.target.res, s.target.res, fx, fy, size, dpr);
+        trim(ctx, s.project.frame, s.target.res, fx, fy, size, dpr);
         ring(ctx, fx, fy, size, dpr, s.project.frame.pins);
       } else message = s.pictureMissing ? t("picture.reopen") : t("run.preparing");
       if (live && live.length >= 2) {
@@ -158,6 +187,12 @@ export function mountStage(root: HTMLElement, ctl: Controller, syncs: Sync[]): v
           ctx.fillRect((fx + wipe * size) * dpr - dpr, fy * dpr, 2 * dpr, size * dpr);
         }
       }
+      // the piece shown is the made one, on the frame it was made for (the current one while it is being made)
+      if (fast || shown) {
+        const frame = running ? s.project.frame : (s.made?.frame ?? s.project.frame);
+        trim(ctx, frame, shown ? shown.width : res, fx, fy, size, dpr);
+        if (s.target && s.view.compare === "side") trim(ctx, s.project.frame, s.target.res, 0, 0, size, dpr);
+      }
     }
     empty.textContent = message;
     empty.hidden = !message;
@@ -180,10 +215,10 @@ export function mountStage(root: HTMLElement, ctl: Controller, syncs: Sync[]): v
 
   /** Moves the crop so that the picture point under grid position (gx, gy) stays there while the scale changes. */
   function zoomAbout(s: AppState, gx: number, gy: number, factor: number): void {
-    const { crop, width, height } = sourceShape(s), res = s.project.generator.res;
+    const { crop, width, height, span } = sourceShape(s), res = s.project.generator.res;
     const scale = Math.min(20, Math.max(0.2, crop.scale * factor));
-    const [px, py] = gridToPicture(crop, width, height, res, gx, gy);
-    const [qx, qy] = gridToPicture({ ...crop, scale }, width, height, res, gx, gy);
+    const [px, py] = gridToPicture(crop, width, height, res, gx, gy, span);
+    const [qx, qy] = gridToPicture({ ...crop, scale }, width, height, res, gx, gy, span);
     ctl.setCrop({ scale, cx: Math.min(1, Math.max(0, crop.cx + px - qx)), cy: Math.min(1, Math.max(0, crop.cy + py - qy)) });
   }
 
@@ -217,9 +252,9 @@ export function mountStage(root: HTMLElement, ctl: Controller, syncs: Sync[]): v
     if (dragging === "brush" && live) {
       if (Math.hypot(x - live[live.length - 2]!, y - live[live.length - 1]!) >= 2) { live.push(x, y); invalidate(); }
     } else if (dragging === "pan" && last) {
-      const { crop, width, height } = sourceShape(s), res = s.project.generator.res;
-      const [ax, ay] = gridToPicture(crop, width, height, res, ...toGrid(s, last[0], last[1]));
-      const [bx, by] = gridToPicture(crop, width, height, res, ...toGrid(s, x, y));
+      const { crop, width, height, span } = sourceShape(s), res = s.project.generator.res;
+      const [ax, ay] = gridToPicture(crop, width, height, res, ...toGrid(s, last[0], last[1]), span);
+      const [bx, by] = gridToPicture(crop, width, height, res, ...toGrid(s, x, y), span);
       ctl.setCrop({ cx: Math.min(1, Math.max(0, crop.cx + ax - bx)), cy: Math.min(1, Math.max(0, crop.cy + ay - by)) });
       last = [x, y];
     } else if (dragging === "wipe") moveWipe(s, x);
@@ -230,13 +265,14 @@ export function mountStage(root: HTMLElement, ctl: Controller, syncs: Sync[]): v
     pointers.delete(e.pointerId);
     pinch = 0;
     if (dragging === "brush" && live) {
-      const { crop, width, height } = sourceShape(s), res = s.project.generator.res, pts: number[] = [];
+      const { crop, width, height, span } = sourceShape(s), res = s.project.generator.res, pts: number[] = [];
       for (let i = 0; i < live.length; i += 2) {
-        const [px, py] = gridToPicture(crop, width, height, res, ...toGrid(s, live[i]!, live[i + 1]!));
+        const [px, py] = gridToPicture(crop, width, height, res, ...toGrid(s, live[i]!, live[i + 1]!), span);
         pts.push(px, py);
       }
-      // the brush size is a share of the frame on screen; a stroke stores it as a share of the picture's short side
-      ctl.addStroke({ w: s.view.brush.weight, r: s.view.brush.radius / crop.scale, pts });
+      // the brush size is a share of the frame on screen; a stroke stores it as a share of the picture's short
+      // side, which is what a round frame spans at scale 1 (a rectangular one spans `span`)
+      ctl.addStroke({ w: s.view.brush.weight, r: (s.view.brush.radius / crop.scale) * (span / Math.min(width, height)), pts });
       live = null;
       invalidate();
     }

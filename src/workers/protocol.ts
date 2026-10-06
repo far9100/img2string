@@ -1,5 +1,6 @@
 // Messages between the page and its workers: discriminated on `t`, matched by `id` (after img2shadow's
 // worker/protocol.ts). Typed arrays travel as transferables where the sender no longer needs them.
+import type { FrameOptions, FrameSpec } from "../core/frame.ts";
 import type { Tuning } from "../core/autoAdjust.ts";
 import type { GamutSummary } from "../core/gamut.ts";
 import type { Adjust, Crop, ImportancePreset, Mode, StopReason, Stroke } from "../core/project.ts";
@@ -11,17 +12,17 @@ import type { Region } from "../core/truewidth.ts";
 // automatic adjustment
 
 export type ToGen =
-  | { t: "start"; id: number; options: Options; target: Float64Array; weight: Float64Array; resume: number[][] | null; preview: boolean }
+  | { t: "start"; id: number; options: FrameOptions; target: Float64Array; weight: Float64Array; resume: number[][] | null; preview: boolean }
   | { t: "stop"; id: number }
   /** Runs to the end without progress and answers with the error only (the winding-order search, §6.3). */
-  | { t: "score"; id: number; options: Options; target: Float64Array; weight: Float64Array }
+  | { t: "score"; id: number; options: FrameOptions; target: Float64Array; weight: Float64Array }
   /** Makes the target from the picture with these sliders, runs to the end and answers with how close the piece
    * at true thread width is to the picture (automatic adjustment, DECISIONS D-55). `picture` is the cropped
    * picture before any adjustment and `painted` the importance map without automatic emphasis. */
-  | { t: "tune"; id: number; options: Options; mode: Mode; picture: Float64Array; painted: Float64Array; invert: boolean; tuning: Tuning }
+  | { t: "tune"; id: number; options: FrameOptions; mode: Mode; picture: Float64Array; painted: Float64Array; invert: boolean; tuning: Tuning }
   /** Runs the specification's own generate() (§12) here, so its time can be compared with the app's
    * generator in the same browser and worker (§13.4, DECISIONS D-08). */
-  | { t: "reference"; id: number; options: Options; target: Float64Array; weight: Float64Array };
+  | { t: "reference"; id: number; options: FrameOptions; target: Float64Array; weight: Float64Array };
 
 export type FromGen =
   /** Every 100 lines (§5.2). `tail` holds the (thread, pin) pairs appended since the previous message, so the
@@ -42,6 +43,8 @@ export type FromGen =
 
 export interface TargetRequest {
   res: number;
+  /** The frame's shape: the crop and the weights depend on it (nothing for a round frame). */
+  frame: FrameSpec;
   crop: Crop;
   adjust: Adjust;
   mode: Mode;
@@ -60,6 +63,7 @@ export interface TargetRequest {
  * automatic adjustment tries its settings on, and what a piece is compared with (DECISIONS D-54, D-55). */
 export interface CropRequest {
   res: number;
+  frame: FrameSpec;
   crop: Crop;
   board: RGB;
   preset: ImportancePreset;
@@ -90,12 +94,12 @@ export type FromPre =
 
 export type ToRender =
   /** `sigmaMm` > 0 blurs for the viewing distance; `region` is in working-grid coordinates (the magnifier). */
-  | { t: "render"; id: number; ticket: number; options: Options; sequences: number[][]; width: number; height: number; region: Region | null; sigmaMm: number }
+  | { t: "render"; id: number; ticket: number; options: FrameOptions; sequences: number[][]; width: number; height: number; region: Region | null; sigmaMm: number }
   /** The error reduction and Delta-E measured on the true-width render at the working resolution; with
    * `original` (the cropped picture before any adjustment, the painted importance map, and what the reference
    * picture is made with) also how close the render is to that picture. */
   | {
-      t: "measure"; id: number; ticket: number; options: Options; sequences: number[][]; target: Float64Array; weight: Float64Array;
+      t: "measure"; id: number; ticket: number; options: FrameOptions; sequences: number[][]; target: Float64Array; weight: Float64Array;
       original: { picture: Float64Array; painted: Float64Array; mode: Mode; invert: boolean } | null;
     };
 

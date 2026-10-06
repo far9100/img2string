@@ -9,10 +9,11 @@ import {
   applyPreset, defaultOrder, freeCandidates, ORDER_SEARCH_MAX, ORDER_SEARCH_VERIFY, paletteWarnings, permutations, pickPalette, placeByLightness, presetById, proxyOptions, reorder, toHex,
 } from "../core/palette.ts";
 import {
-  generationKey, LIMITS, modeDefaults, normalizeProject, serializeProject, targetKey, toOptions,
+  frameSpec, generationKey, LIMITS, modeDefaults, normalizeProject, serializeProject, targetKey, toOptions,
   type Crop, type Mode, type Project, type Result, type Stroke, type ThreadSpec,
 } from "../core/project.ts";
-import { circleMask, hexToLinear, type Options } from "../core/stringart.ts";
+import { frameBounds, frameMask } from "../core/frame.ts";
+import { hexToLinear, type Options } from "../core/stringart.ts";
 import type { SampleId } from "../core/targets.ts";
 import type { Region } from "../core/truewidth.ts";
 import type { BuiltFile, ExportKind } from "../export/build.ts";
@@ -294,14 +295,14 @@ export class Controller {
   /** `gamut`: also check the colours (§6.3); only a colour picture has colours a palette can miss. */
   private request(p: Project, res: number, gamut = p.mode === "colour"): TargetRequest {
     return {
-      res, crop: p.image.crop, adjust: p.adjust, mode: p.mode, board: hexToLinear(p.board), threads: p.threads.map((th) => hexToLinear(th.hex)),
+      res, frame: frameSpec(p.frame), crop: p.image.crop, adjust: p.adjust, mode: p.mode, board: hexToLinear(p.board), threads: p.threads.map((th) => hexToLinear(th.hex)),
       preset: p.importance.preset, strokes: p.importance.strokes, edges: p.importance.edges, tone: p.importance.tone, gamut,
     };
   }
 
   /** The picture as it is, at `res`: for the automatic adjustment and the similarity number. */
   private cropRequest(p: Project, res: number): CropRequest {
-    return { res, crop: p.image.crop, board: hexToLinear(p.board), preset: p.importance.preset, strokes: p.importance.strokes };
+    return { res, frame: frameSpec(p.frame), crop: p.image.crop, board: hexToLinear(p.board), preset: p.importance.preset, strokes: p.importance.strokes };
   }
 
   private scheduleTarget(): void {
@@ -395,10 +396,10 @@ export class Controller {
     let rgba = finished?.rgba ?? null, deltaE = finished?.deltaE ?? null;
     if (!rgba || (!deltaE && target)) {
       const px = o.res * o.res;
-      const model = replayModel(o, target?.target ?? new Float64Array(3 * px), target?.weight ?? circleMask(o.res), result.sequences);
+      const model = replayModel(o, target?.target ?? new Float64Array(3 * px), target?.weight ?? frameMask(o), result.sequences);
       rgba = toRgba8(model.C, px);
       if (target) {
-        const mask = circleMask(o.res);
+        const mask = frameMask(o);
         deltaE = [meanDeltaEFlat(o.board, target.target, mask), meanDeltaE(model.C, target.target, mask)];
       }
     }
@@ -630,7 +631,16 @@ export class Controller {
     if (!made?.result) return null;
     this.store.update((x) => ({ ...x, busyExport: true }));
     try {
-      const img = await this.renderer.render("export", toOptions(made), made.result.sequences, size, size, null, 0);
+      const o = toOptions(made), res = made.generator.res, gridMm = made.frame.diameterMm / (res - 1);
+      if (made.frame.shape === "rect") {
+        // the frame alone, not the empty grid beside it: its pixels, half a pixel beyond the outline all round
+        const b = frameBounds(o), across = b.x1 - b.x0 + 1, down = b.y1 - b.y0 + 1, scale = size / Math.max(across, down);
+        const width = Math.max(1, Math.round(across * scale)), height = Math.max(1, Math.round(down * scale));
+        const img = await this.renderer.render("export", o, made.result.sequences, width, height, { x0: b.x0 - 0.5, y0: b.y0 - 0.5, x1: b.x1 + 0.5, y1: b.y1 + 0.5 }, 0);
+        if (!img) return null;
+        return { name: FILE.preview(stemOf(made.image.name)), mime: "image/png", bytes: encodePng(new Uint8Array(img.rgba.buffer), width, height, 4, { pixelMm: (across * gridMm) / width }) };
+      }
+      const img = await this.renderer.render("export", o, made.result.sequences, size, size, null, 0);
       if (!img) return null;
       const mmPerPixel = (made.frame.diameterMm * made.generator.res) / (made.generator.res - 1) / size;
       return { name: FILE.preview(stemOf(made.image.name)), mime: "image/png", bytes: encodePng(new Uint8Array(img.rgba.buffer), size, size, 4, { pixelMm: mmPerPixel }) };

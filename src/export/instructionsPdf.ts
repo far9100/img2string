@@ -88,7 +88,9 @@ function gridOf(s: SheetTexts, pins: number, measure: Measure, WIDTH: number): G
   const last = Math.max(1, ...s.sections.map((section) => (section.rows.length ? section.rows[section.rows.length - 1]!.index : 1)));
   const indexW = String(last).length * digit(SMALL);
   const numW = String(pins).length * digit(PIN), cellW = numW + BETWEEN_PINS;
-  const colW = BOX + AFTER_BOX + indexW + AFTER_INDEX + 9 * cellW + numW + BEFORE_CLOCK + measure("12:55", SMALL);
+  // the hint at the end of a row: a clock time, or on a rectangular frame a side and a number, which may be wider
+  const hintW = Math.max(measure("12:55", SMALL), ...s.sections.flatMap((section) => section.rows.map((row) => measure(row.clock, SMALL))));
+  const colW = BOX + AFTER_BOX + indexW + AFTER_INDEX + 9 * cellW + numW + BEFORE_CLOCK + hintW;
   const cols = Math.max(1, Math.floor((WIDTH + GAP) / (colW + GAP)));
   return { cols, pitch: (WIDTH + GAP) / cols, colW, indexW, numW, cellW };
 }

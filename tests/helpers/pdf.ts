@@ -5,8 +5,12 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { unzlibSync } from "fflate";
 import { decodePDFRawStream, PDFArray, PDFDocument, type PDFRawStream } from "pdf-lib";
-import { allowedPairs, pictureAspect } from "../../src/core/frame.ts";
-import { defaultProject, frameSpec, generationKey, type Project } from "../../src/core/project.ts";
+import { allowedPairs, frameMask, pictureAspect } from "../../src/core/frame.ts";
+import { runGreedy } from "../../src/core/greedy.ts";
+import { placeInside, placeRes } from "../../src/core/inside.ts";
+import { defaultProject, frameSpec, generationKey, toOptions, type Project } from "../../src/core/project.ts";
+import { hexToLinear } from "../../src/core/stringart.ts";
+import { lineDrawing } from "./pictures.ts";
 import { mulberry32 } from "./rng.ts";
 
 const latin1 = (b: Uint8Array) => Array.from(b, (c) => String.fromCharCode(c)).join("");
@@ -72,6 +76,33 @@ export function rectProject(lines: readonly number[], width = 600, height = 800,
     return sequence;
   });
   p.result = { key: generationKey(p), sequences, lines: sequences.map((s) => Math.max(0, s.length - 1)), errorReduction: 0.9, meanDeltaEOk: 10, reason: "budget" };
+  return p;
+}
+
+/**
+ * A project with pins inside the picture (DECISIONS D-60) and a piece really generated for it, on the test line
+ * drawing: 96 pins on a 300 mm frame and up to `count` inside, placed and wound as the app does it (the pins on
+ * their own 1.25 mm grid from the picture, the lines at the working resolution with trips), so its sequence
+ * holds steps round the frame and steps along lines drawn before. `edit` changes the project before the pins
+ * are placed (the frame's shape, the threads).
+ */
+export function insideProject(count = 40, edit: (p: Project) => void = () => {}): Project {
+  const p = defaultProject();
+  p.image = { name: "drawing.png", sha256: "c".repeat(64), sample: null, width: 600, height: 600, crop: { ...p.image.crop }, embedded: null };
+  p.frame = { shape: "circle", diameterMm: 300, pins: 96, pinDiameterMm: 1.5, ...(count ? { inside: count } : {}) };
+  p.thread = { widthMm: 0.5 };
+  p.threads = [{ name: "black", hex: "#111111", maxLines: 1500 }];
+  p.generator = { res: 120, minSkip: 8, allowRepeat: false };
+  edit(p);
+  const at = placeRes(p.frame.diameterMm), spec = frameSpec(p.frame), board = hexToLinear(p.board);
+  const inside = p.frame.inside
+    ? placeInside(lineDrawing(at, at / 80), frameMask({ res: at, ...spec }), { res: at, board, diameterMm: p.frame.diameterMm, pinDiameterMm: p.frame.pinDiameterMm, ...spec }, p.frame.inside)
+    : [];
+  const o = toOptions(p, inside), run = runGreedy(o, lineDrawing(o.res, 1.5), frameMask(o));
+  p.result = {
+    key: generationKey(p), sequences: run.seq.map((s) => s.slice()), lines: run.seq.map((s) => Math.max(0, s.length - 1)), errorReduction: 0.5, meanDeltaEOk: 10, reason: "converged",
+    ...(inside.length ? { inside } : {}),
+  };
   return p;
 }
 

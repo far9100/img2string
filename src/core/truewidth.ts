@@ -7,8 +7,16 @@
 // thread on top there (0 = bare board), so painting a stripe is writing its label and "opaque, in winding
 // order" is painting layer 0 first. Only a band of rows is held at a time; its output pixels are the mean
 // colour of their S x S sub-pixels.
-import { framePins, type FrameOptions } from "./frame.ts";
-import { coverageAlpha } from "./stringart.ts";
+//
+// A piece with pins inside the picture (DECISIONS D-60) shows those pins: each is a disc of the pin's diameter,
+// drawn over every thread, since the head of a nail is above the thread wound round it. A step of such a piece
+// that goes round the frame is no line, and is not drawn.
+import { framePins, insideCount, isRound, pinOf, type FrameOptions } from "./frame.ts";
+import { coverageAlpha, hexToLinear, pixelMm } from "./stringart.ts";
+
+/** What a pin inside the picture is drawn in: a mid grey, about what a steel nail's head looks like from a
+ * few steps away. (The colour of the pins is not a setting.) */
+export const PIN_HEAD = hexToLinear("#808080");
 
 /** A rectangle in working-grid coordinates (pixel centres at whole numbers; may be fractional). */
 export interface Region { x0: number; y0: number; x1: number; y1: number }
@@ -39,8 +47,9 @@ const wholeGrid = (res: number): Region => ({ x0: -0.5, y0: -0.5, x1: res - 0.5,
  * columns before it got, placed nearest the line: the area is right for every line, whatever its direction.
  */
 function render(o: FrameOptions, sequences: readonly (readonly number[])[], width: number, height: number, region: Region, S: number): Float64Array {
-  const K = o.threads.length;
-  if (K > 255) throw new RangeError(`the true-width render labels threads with one byte: 255 threads at most, got ${K}`);
+  // the labels: 0 the board, 1..K the threads and, with pins inside the picture, one more for their heads
+  const K = o.threads.length, heads = insideCount(o), top = heads ? K + 1 : K;
+  if (top > 255) throw new RangeError(`the true-width render labels threads with one byte: 255 threads at most, got ${K}`);
   const gw = width * S, gh = height * S, sx = gw / (region.x1 - region.x0), sy = gh / (region.y1 - region.y0);
   const alpha = coverageAlpha(o), P = framePins(o);
   const thin = alpha * Math.min(Math.abs(sx), Math.abs(sy)) < MIN_STRIPE * (1 - 1e-9);
@@ -53,7 +62,9 @@ function render(o: FrameOptions, sequences: readonly (readonly number[])[], widt
   for (let k = 0; k < K && k < sequences.length; k++) {
     const s = sequences[k]!;
     for (let i = 1; i < s.length; i++) {
-      const ux = P[2 * s[i - 1]!]!, uy = P[2 * s[i - 1]! + 1]!, vx = P[2 * s[i]!]!, vy = P[2 * s[i]! + 1]!;
+      if (heads && isRound(s[i]!)) continue; // round the frame: no line across the picture
+      const from = heads ? pinOf(s[i - 1]!) : s[i - 1]!;
+      const ux = P[2 * from]!, uy = P[2 * from + 1]!, vx = P[2 * s[i]!]!, vy = P[2 * s[i]! + 1]!;
       const tall = Math.abs((vy - uy) * sy) > Math.abs((vx - ux) * sx);
       let a0 = tall ? (uy - region.y0) * sy : (ux - region.x0) * sx, a1 = tall ? (vy - region.y0) * sy : (vx - region.x0) * sx;
       let b0 = tall ? (ux - region.x0) * sx : (uy - region.y0) * sy, b1 = tall ? (vx - region.x0) * sx : (vy - region.y0) * sy;
@@ -71,13 +82,16 @@ function render(o: FrameOptions, sequences: readonly (readonly number[])[], widt
     }
   }
 
-  const colours = new Float64Array(3 * (K + 1));
+  const colours = new Float64Array(3 * (top + 1));
   colours.set(o.board, 0);
   for (let k = 0; k < K; k++) colours.set(o.threads[k]!, 3 * (k + 1));
+  if (heads) colours.set(PIN_HEAD, 3 * top);
+  // a pin's head in sub-pixels: an ellipse where the two axes are not drawn at the same scale
+  const headPx = (o.pinDiameterMm ?? 1.5) / 2 / pixelMm(o), headX = headPx * Math.abs(sx), headY = headPx * Math.abs(sy);
 
   const out = new Float64Array(3 * width * height), area = S * S;
   const bandRows = Math.max(1, Math.min(gh, Math.floor(BAND_BYTES / gw)));
-  const labels = new Uint8Array(gw * bandRows), counts = new Int32Array((K + 1) * width);
+  const labels = new Uint8Array(gw * bandRows), counts = new Int32Array((top + 1) * width);
   for (let r0 = 0; r0 < gh; r0 += bandRows) {
     const r1 = Math.min(gh, r0 + bandRows);
     labels.fill(0, 0, (r1 - r0) * gw);
@@ -126,14 +140,22 @@ function render(o: FrameOptions, sequences: readonly (readonly number[])[], widt
         }
       }
     }
+    // the heads of the pins inside the picture, over everything: the sub-pixels whose centre is in the disc
+    for (let h = 0; h < heads; h++) {
+      const cx = (P[2 * (o.pins + h)]! - region.x0) * sx, cy = (P[2 * (o.pins + h) + 1]! - region.y0) * sy;
+      for (let j = Math.max(r0, Math.ceil(cy - headY - 0.5)), end = Math.min(r1 - 1, Math.floor(cy + headY - 0.5)); j <= end; j++) {
+        const dy = (j + 0.5 - cy) / headY, half = headX * Math.sqrt(Math.max(0, 1 - dy * dy));
+        for (let p = (j - r0) * gw + Math.max(0, Math.ceil(cx - half - 0.5)), q = (j - r0) * gw + Math.min(gw - 1, Math.floor(cx + half - 0.5)); p <= q; p++) labels[p] = top;
+      }
+    }
     // count the labels of each output pixel; a band may end in the middle of an output row, so the counts
     // are kept until the row's last sub-pixel row has been seen
     for (let r = r0; r < r1; r++) {
-      for (let x = 0, p = (r - r0) * gw, c = 0; x < width; x++, c += K + 1) for (let s = 0; s < S; s++) counts[c + labels[p++]!]!++;
+      for (let x = 0, p = (r - r0) * gw, c = 0; x < width; x++, c += top + 1) for (let s = 0; s < S; s++) counts[c + labels[p++]!]!++;
       if ((r + 1) % S !== 0) continue;
-      for (let x = 0, c = 0, q = 3 * width * ((r + 1) / S - 1); x < width; x++, c += K + 1, q += 3) {
+      for (let x = 0, c = 0, q = 3 * width * ((r + 1) / S - 1); x < width; x++, c += top + 1, q += 3) {
         let red = 0, green = 0, blue = 0, whole = -1;
-        for (let l = 0; l <= K; l++) {
+        for (let l = 0; l <= top; l++) {
           const n = counts[c + l]!;
           if (!n) continue;
           counts[c + l] = 0;

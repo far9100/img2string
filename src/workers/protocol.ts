@@ -57,6 +57,9 @@ export interface TargetRequest {
   tone: number;
   /** Also check which of the picture's colours the palette cannot mix (§6.3). */
   gamut: boolean;
+  /** Pins to stand inside the picture (DECISIONS D-60): how many, and the two sizes their places go by. Only
+   * the worker can place them, since only it has the picture. Left out when there are to be none. */
+  inside?: { count: number; diameterMm: number; pinDiameterMm: number };
 }
 
 /** The picture through a crop and the painted importance map, with nothing else done to them: what the
@@ -85,6 +88,9 @@ export type FromPre =
       gamut: GamutSummary | null; gamutRgba: Uint8ClampedArray | null;
       /** blankShare() of the picture before any adjustment: how much of it is like the bare board. */
       blank: number;
+      /** The pins inside the picture, when the request asked for some: x, y per pin as fractions of the frame's
+       * span, in the order they are numbered (inside.ts). Empty when none were asked for or none could stand. */
+      inside: number[];
     }
   /** 3 x res x res linear RGB, and one weight per pixel (0 outside the pin circle). */
   | { t: "cropped"; id: number; ticket: number; res: number; picture: Float64Array; painted: Float64Array }

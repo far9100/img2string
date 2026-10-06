@@ -1,6 +1,7 @@
 // SVG downloads (spec §7.2, §7.6), in millimetre units so they print, cut or drill at their real size:
 // the nail template, with the pins as <circle> elements in a group of their own, and the finished piece as
 // vectors, every line a stroke of the thread's width. The primitive writer is ported from img2fold.
+import { isRound, pinOf } from "../core/frame.ts";
 import { NO_RESULT, threadLabel, threadPlans } from "../core/instructions.ts";
 import type { Project } from "../core/project.ts";
 import { DEFAULT_STROKE, type PathCmd, type Prim } from "../render/prims.ts";
@@ -60,8 +61,8 @@ export function svgDocument(width: number, height: number, body: readonly string
 
 /** The nail template: the drawing of render/template.ts in the groups "board", "frame", "marks" and "pins".
  * The group "pins" holds one <circle> per pin, in pin order, and nothing else. */
-export function templateSvg(frame: Project["frame"], title?: string): string {
-  const L = templateLayers(frame), { width, height } = boardSize(frame);
+export function templateSvg(frame: Project["frame"], title?: string, inside?: ArrayLike<number>): string {
+  const L = templateLayers(frame, inside), { width, height } = boardSize(frame);
   return svgDocument(width, height, [svgGroup("board", L.board), svgGroup("frame", L.frame), svgGroup("marks", L.marks), svgGroup("pins", L.pins)], { title });
 }
 
@@ -70,12 +71,14 @@ export function templateSvg(frame: Project["frame"], title?: string): string {
  * ends. Same coordinates as the template. Throws Error("no-result") when the project has no result. */
 export function linesSvg(p: Project, title?: string): string {
   if (!p.result) throw new Error(NO_RESULT);
-  const { width, height } = boardSize(p.frame);
-  const P = templatePins(p.frame).map(([x, y]) => [n(x), n(y)] as const);
+  const { width, height } = boardSize(p.frame), inside = p.result.inside, pinned = !!inside?.length;
+  const P = templatePins(p.frame, inside).map(([x, y]) => [n(x), n(y)] as const);
   const groups = threadPlans(p).map((plan) => {
     const out = [`<g id="thread-${plan.index + 1}" fill="none" stroke="${esc(plan.hex)}" stroke-width="${n(p.thread.widthMm)}" stroke-linecap="butt">`, `<title>${esc(threadLabel(plan.name, plan.hex))}</title>`];
     for (let i = 1; i < plan.sequence.length; i++) {
-      const a = P[plan.sequence[i - 1]!]!, b = P[plan.sequence[i]!]!;
+      // on a piece with pins inside the picture, a step round the frame is no line (D-60)
+      if (pinned && isRound(plan.sequence[i]!)) continue;
+      const a = P[pinned ? pinOf(plan.sequence[i - 1]!) : plan.sequence[i - 1]!]!, b = P[plan.sequence[i]!]!;
       out.push(`<line x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}"/>`);
     }
     out.push(`</g>`);

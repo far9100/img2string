@@ -6,7 +6,7 @@
 // after column, so 4,000 lines take a few pages. The text is laid out as primitives first (layoutInstructions,
 // no PDF needed), which is also what tells the page count for the footers. The flow is after img2shadow's
 // placement sheet.
-import { NO_RESULT, sheetTexts, type Row, type SheetTexts } from "../core/instructions.ts";
+import { NO_RESULT, ROUND_MARK, sheetTexts, type Row, type SheetTexts } from "../core/instructions.ts";
 import type { Paper, Project } from "../core/project.ts";
 import { t, type Lang } from "../i18n/translate.ts";
 import type { Prim } from "../render/prims.ts";
@@ -87,7 +87,9 @@ function gridOf(s: SheetTexts, pins: number, measure: Measure, WIDTH: number): G
   const digit = (size: number) => Math.max(...[..."0123456789"].map((d) => measure(d, size)));
   const last = Math.max(1, ...s.sections.map((section) => (section.rows.length ? section.rows[section.rows.length - 1]!.index : 1)));
   const indexW = String(last).length * digit(SMALL);
-  const numW = String(pins).length * digit(PIN), cellW = numW + BETWEEN_PINS;
+  // room for the largest pin number and, where a step goes round the frame, for the mark before it (D-60)
+  const marked = s.sections.some((section) => section.rows.some((row) => row.round));
+  const numW = String(pins).length * digit(PIN) + (marked ? measure(ROUND_MARK, PIN) : 0), cellW = numW + BETWEEN_PINS;
   // the hint at the end of a row: a clock time, or on a rectangular frame a side and a number, which may be wider
   const hintW = Math.max(measure("12:55", SMALL), ...s.sections.flatMap((section) => section.rows.map((row) => measure(row.clock, SMALL))));
   const colW = BOX + AFTER_BOX + indexW + AFTER_INDEX + 9 * cellW + numW + BEFORE_CLOCK + hintW;
@@ -103,7 +105,7 @@ function rowPrims(row: Row, x: number, y: number, g: Grid, ruled: boolean): Prim
     { t: "text", at: [indexX, mid + (DIGIT_H / 2) * SMALL], text: String(row.index), size: SMALL, color: MUTED, align: "right" },
     { t: "text", at: [pinX + 9 * g.cellW + g.numW + BEFORE_CLOCK, mid + (DIGIT_H / 2) * SMALL], text: row.clock, size: SMALL, color: MUTED },
   ];
-  row.pins.forEach((pin, j) => out.push({ t: "text", at: [pinX + j * g.cellW + g.numW, mid + (DIGIT_H / 2) * PIN], text: String(pin), size: PIN, color: INK, align: "right" }));
+  row.pins.forEach((pin, j) => out.push({ t: "text", at: [pinX + j * g.cellW + g.numW, mid + (DIGIT_H / 2) * PIN], text: `${row.round?.includes(j) ? ROUND_MARK : ""}${pin}`, size: PIN, color: INK, align: "right" }));
   // a hairline under every fifth row keeps the eye on its row
   if (ruled) out.push({ t: "line", a: [x, y + ROW], b: [x + g.colW, y + ROW], stroke: RULE, width: 0.12 });
   return out;
@@ -129,6 +131,10 @@ export function layoutInstructions(s: SheetTexts, pins: number, measure: Measure
   flow.line(s.subtitle, BODY, SIDE, MUTED);
   heading(s.howTitle);
   para(s.how);
+  if (s.howMore) {
+    flow.y += 1.2;
+    para(s.howMore);
+  }
 
   // ---- materials (§7.5): a small table, then the notes
   heading(s.materialsTitle);
@@ -217,7 +223,9 @@ export async function instructionsPdf(fontBytes: Uint8Array, project: Project, l
   const printable = glyphTest(font);
   const s = sheetTexts(project, lang, printable);
   const [PAGE_W, PAGE_H] = sheetPage(project.paper);
-  const pages = layoutInstructions(s, project.frame.pins, (text, size) => textWidthMm(font, text, size), (text, size, width) => wrap(font, text, size, width), [PAGE_W, PAGE_H]);
+  // the largest pin number printed: the frame's pins and, for a piece that has them, those inside the picture
+  const pins = project.frame.pins + (project.result.inside ? project.result.inside.length / 2 : 0);
+  const pages = layoutInstructions(s, pins, (text, size) => textWidthMm(font, text, size), (text, size, width) => wrap(font, text, size, width), [PAGE_W, PAGE_H]);
   const footer = stem && printable(stem) ? `${s.title} · ${stem}` : s.title;
   pages.forEach((prims, i) => {
     const page = addPage(doc, PAGE_W, PAGE_H);

@@ -28,6 +28,9 @@ export interface TargetView {
   gamutRgba: Uint8ClampedArray | null;
   /** How much of the picture, before any adjustment, is like the bare board (0..1): mostly, for a line drawing. */
   blank: number;
+  /** Where the pins inside the picture would stand for this target (DECISIONS D-60): x, y per pin as fractions
+   * of the frame's span; empty when the frame asks for none. A made piece keeps its own in its result. */
+  inside: number[];
 }
 
 export interface RunState {

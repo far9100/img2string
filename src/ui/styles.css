@@ -256,6 +256,8 @@ input.hex { width: 84px; flex: none; font-variant-numeric: tabular-nums; text-tr
 .materials th { text-align: left; font-weight: 400; padding: 3px 6px 3px 0; }
 .materials td { text-align: right; padding: 3px 0 3px 6px; white-space: nowrap; }
 .materials tr.total th, .materials tr.total td { border-top: 1px solid var(--line-strong); font-weight: 600; }
+.materials th { white-space: nowrap; }
+.materials td.detail { white-space: normal; color: var(--muted); padding-top: 0; }
 .stack button { width: 100%; }
 
 /* ---------- the winding player (§7.4) ---------- */
@@ -278,6 +280,9 @@ dialog.player::backdrop { background: rgba(0, 0, 0, 0.55); }
 .player-clock { font-size: 20px; margin: 4px 0; }
 .player-then { color: var(--muted); margin: 0; min-height: 1.5em; }
 .player-map { width: 280px; height: 280px; }
+.player-maps { display: grid; gap: 6px; justify-items: center; }
+.player-near { width: 220px; height: 220px; border: 1px solid var(--line); border-radius: 4px; }
+.player-near-label { margin: 0; text-align: center; }
 .player-status { text-align: center; margin: 6px 0 10px; color: var(--muted); }
 .player-buttons { display: grid; grid-template-columns: 1fr 2fr; gap: 10px; }
 .player-buttons button { text-align: center; padding: 16px; font-size: 18px; }

@@ -43,7 +43,8 @@ or a phone. There is nothing to download or install.
 2. Choose the colours: **One colour** or **Several colours**, a palette, the
    board colour and the winding order. Choose the frame: round, or a
    rectangle with the picture's proportions. Set its size, the number of pins
-   (64 to 512) and the thread width.
+   (64 to 512) and the thread width. For a line drawing, add pins inside the
+   picture (see below).
 3. Optionally, **Find the settings closest to the picture** sets the
    adjustment sliders for you.
 4. **Generate**. Lines appear while it works; **Stop** keeps what is there,
@@ -108,8 +109,9 @@ Three facts explain what comes out:
   drawings got 60 to 490 lines (median 212) and no recognisable picture. The
   automatic adjustment (below) helps, and a white thread wound last helps
   more, at about five times the lines; the page says so when a picture is
-  mostly blank. More pins do not rescue a line drawing: going from 128 to 256
-  pins matters, beyond 256 it adds little.
+  mostly blank. More pins on the frame do not rescue a line drawing: going
+  from 128 to 256 pins matters, beyond 256 it adds little. Pins inside the
+  picture do (below).
 - A piece is hours of work: at 8 seconds per line, 1,450 lines take a little
   over 3 hours.
 
@@ -131,8 +133,25 @@ Three facts explain what comes out:
   On eight line drawings the round piece, laid back on the whole picture, is
   44 % like it; the rectangular one 52 %. The shape of the frame does not
   make a piece better where both show the picture: a line still crosses all
-  of it. What does is pins inside the picture, which this page does not do
-  (DECISIONS D-57).
+  of it (DECISIONS D-57). What does is pins inside the picture: the next
+  point.
+- **Pins inside the picture** (under *Frame and thread*) put up to 600 more
+  pins on the picture's own strokes, so that a line can run along a stroke
+  instead of crossing the whole frame. On eight line drawings with 300 of
+  them the similarity rises from 56 % to 68 % (every one of the eight), and
+  with a white thread as well from 73 % to 83 %; the face sample goes from
+  50 % to 68 %. The page offers them when a picture is mostly blank. What
+  they cost: a few hundred more nails, whose heads show in the picture (the
+  preview draws them); about twice the lines, though less thread; and a
+  board that fits this one picture, because the pins stand where its strokes
+  are. Nothing that leaves the picture as it is moves them: generating again
+  keeps every pin where it was. When no line from where the thread is helps
+  any more, the thread goes on somewhere else: round the outside of the
+  frame, or back along a line it has wound. The instructions mark a step
+  round the frame with “~”, the template numbers every pin, and the player
+  shows the next pin among its neighbours. The thread that goes round the
+  frame lies along its nails, outside the picture: about a hundred times in
+  a piece, which no preview shows (DECISIONS D-60).
 - **Centre first** and **Centre only** (under *What matters most*) let the
   outer part of the frame go for the sake of its middle. With Centre only
   the outer third does not count at all and comes out as a tangle; on the
@@ -240,7 +259,7 @@ img2string 會算出線要怎麼繞在框上的釘子之間（圓框或長方框
 用瀏覽器打開 **<https://far9100.github.io/img2string/>** 就能用，電腦或手機都可以，不需要下載或安裝。
 
 1. 按〔上傳圖片〕（也可以把圖拖進頁面或直接貼上），或先試內建範例。拖曳圖片把它擺進釘環，滾輪或雙指可以縮放。
-2. 選顏色：〔單色〕或〔多色〕、調色盤、板子顏色與繞線順序。選框形：圓形，或長寬比跟著圖片的長方形。設定框的大小、釘數（64 到 512）與線寬。
+2. 選顏色：〔單色〕或〔多色〕、調色盤、板子顏色與繞線順序。選框形：圓形，或長寬比跟著圖片的長方形。設定框的大小、釘數（64 到 512）與線寬。線稿可以再加〔畫面內的釘子〕（見下文）。
 3. 需要的話，按〔找出最接近原圖的數值〕，讓程式替你設定調整圖片的滑桿。
 4. 按〔生成〕。計算時線條會逐步出現；按〔停止〕會保留目前的結果，按〔繼續〕可以接著算。
 5. 用〔真實線寬〕、〔觀看距離〕、和圖片並排，或用〔放大鏡〕檢查結果。
@@ -264,13 +283,14 @@ img2string 把每個線色看成一層不透明、只蓋住每個像素一部分
 - 偏暗、平順、沒有大片很亮區域的圖效果最好。很亮的地方會偏灰，因為每條線都橫越整個圓。
 - 只用一條黑線時，深色細節只能暗到中灰，到不了黑：內建的臉部範例裡，眼睛與頭髮的對比大約只有原圖的四成。調色盤〔白板，先黑線再白線〕會在最後繞一條白線，在圖片亮的地方把黑線蓋掉，對比幾乎加倍，但線數與繞線時間約為三倍。
 - 用好幾個顏色時，繞線順序影響很大。〔找出最佳順序〕會試過所有順序（最多四條線），大約十秒。
-- **線稿是最難的圖。** 白底細線的圖大部分是空白的板子，而畫輪廓的線同時也橫越空白處、把它弄灰。以圖片一開始的設定，81 張測試線稿只繞出 60 到 490 條線（中位數 212），看不出原圖。下面的自動調整有幫助，再加一條最後繞的白線幫助更大，代價是線數約五倍；圖片大部分是空白時，頁面會直接說明。多釘釘子救不了線稿：128 釘到 256 釘差很多，256 釘以上就差不多了。
+- **線稿是最難的圖。** 白底細線的圖大部分是空白的板子，而畫輪廓的線同時也橫越空白處、把它弄灰。以圖片一開始的設定，81 張測試線稿只繞出 60 到 490 條線（中位數 212），看不出原圖。下面的自動調整有幫助，再加一條最後繞的白線幫助更大，代價是線數約五倍；圖片大部分是空白時，頁面會直接說明。在框上多釘釘子救不了線稿：128 釘到 256 釘差很多，256 釘以上就差不多了。把釘子釘進畫面裡才有用（見下文）。
 - 一件作品要花好幾個小時：以每條線 8 秒計，1,450 條線要三個小時多一點。
 
 ### 讓成品更好的工具
 
 - **找出最接近原圖的數值**：〔調整圖片〕的滑桿和下面兩個「強調」不必自己試。程式會試大約四十組數值，每一組都實際算出繞線結果、以真實線寬畫出來，和「還沒做任何調整的原圖」比較，留下最像的一組，並告訴你有多像。臉部範例的相似度從 41% 升到 50%；十二張測試線稿從 42% 升到 56%（中位數），再加一條最後繞的白線則到 72%。需要十幾秒到一分鐘，而且只會動那些滑桿。
-- **長方框**看得到整張圖。幾乎沒有圖片是圓的：4:3 的圖放進圓框，最多只看得到 59%；圖片不是正方形時，頁面會說出這個數字，旁邊就是〔改用長方框〕。長方框的長寬比永遠跟著圖片，你只設定長邊。1 號釘在左上角旁邊，順時針編號。8 張測試線稿上，把圓框的成品放回整張圖上比，相似度是 44%，長方框是 52%。在兩種框都看得到的地方，框的形狀不會讓成品更像，因為每條線還是橫越整個畫面；會讓它更像的是釘在畫面裡面的釘子，這個頁面沒有做（DECISIONS D-57）。
+- **長方框**看得到整張圖。幾乎沒有圖片是圓的：4:3 的圖放進圓框，最多只看得到 59%；圖片不是正方形時，頁面會說出這個數字，旁邊就是〔改用長方框〕。長方框的長寬比永遠跟著圖片，你只設定長邊。1 號釘在左上角旁邊，順時針編號。8 張測試線稿上，把圓框的成品放回整張圖上比，相似度是 44%，長方框是 52%。在兩種框都看得到的地方，框的形狀不會讓成品更像，因為每條線還是橫越整個畫面（DECISIONS D-57）；會讓它更像的是釘在畫面裡面的釘子，見下一點。
+- **畫面內的釘子**（在〔框與線〕裡）：再把最多 600 根釘子放在圖片自己的筆畫上，線就可以沿著筆畫走，不必每一條都橫越整個框。8 張測試線稿加 300 根時，相似度從 56% 升到 68%（8 張全部提高）；再加一條白線，是從 73% 升到 83%；臉部範例從 50% 升到 68%。圖片大部分是空白時，頁面會主動提供這個選項。代價：多幾百根釘子，釘頭會出現在畫面裡（預覽會畫出來）；線大約多一倍，不過線長比較短；而且板子只能做這一張圖，因為釘子跟著它的筆畫。只要圖片沒動，釘子就不會動：重新生成時每一根都留在原位。線所在的釘子已經沒有任何有益的線時，線會移到別處繼續：沿著框的外側繞過去，或沿著繞過的線走回去。繞線說明在沿框繞的那一步前面印「~」，模板替每一根釘子標上號碼，播放器會把下一根釘和它周圍的釘子一起畫出來。沿框繞的線會貼在框上釘子的外側、畫面之外，每件大約一百次，預覽圖畫不出這一圈（DECISIONS D-60）。
 - **中央優先**與**只管中央**（在〔哪裡比較重要〕裡）為了中央而放掉框的外圈。〔只管中央〕完全不管外面三分之一，那裡會是亂的；同樣那些線稿，中央和原圖的相似度從 56.5% 升到 63.5%，線還少了三分之一。〔中央優先〕留下淡淡的外圈：61.5%。筆刷可以把任何地方塗回重要。
 - **這些線混得出圖片的顏色嗎**：多色時，頁面會在圖片上用斜線標出板子和線混不出來的地方，說出最缺的是哪個顏色，並可以直接加一條那個顏色的線。色環範例配青、洋紅、黃、黑時，約有 60% 的面積混不出來；加一條綠線就降到三分之一。
 - **讓圖片決定線色**：依圖片選出最多六條線，可以從任何顏色裡選，也可以只從你自己的線色清單裡選。

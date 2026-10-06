@@ -107,7 +107,11 @@ export function proxyOptions<T extends FrameOptions>(o: T): T {
   const res = Math.max(32, Math.min(96, o.res, maxResolution(o.diameterMm, o.threadWidthMm)));
   const pins = Math.max(Math.min(o.pins, 48), Math.min(o.pins, 96));
   const minSkip = Math.max(2, Math.min(maxMinSkip(pins, o.shape), Math.round((o.minSkip * pins) / o.pins)));
-  return { ...o, res, pins, minSkip };
+  if (!o.inside) return { ...o, res, pins, minSkip };
+  // The quick set-up ranks orders on the frame alone: the pins inside the picture stand 6 mm apart, a pixel
+  // here is 5 mm, and the best three orders are run again at the real settings with every pin (D-60).
+  const { inside: _pins, pinDiameterMm: _thick, ...frame } = o;
+  return { ...frame, res, pins, minSkip } as T;
 }
 
 /** `o` with its threads (and their budgets) in the given order. */

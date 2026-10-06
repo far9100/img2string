@@ -18,7 +18,7 @@ type Layer = keyof typeof DXF_LAYERS;
 const CENTRE_ARM = 6;
 const f = (v: number): string => (Math.abs(v) < 5e-5 ? 0 : v).toFixed(4);
 
-export function templateDxf(frame: Project["frame"]): string {
+export function templateDxf(frame: Project["frame"], inside?: ArrayLike<number>): string {
   const { width: W, height: H } = boardSize(frame), cx = W / 2, cy = H / 2;
   const out: (string | number)[] = [];
   const pair = (code: number, value: string | number) => out.push(code, value);
@@ -66,8 +66,9 @@ export function templateDxf(frame: Project["frame"]): string {
   } else circle("FRAME", cx, cy, frame.diameterMm / 2);
   line("MARKS", cx - CENTRE_ARM, cy, cx + CENTRE_ARM, cy);
   line("MARKS", cx, cy - CENTRE_ARM, cx, cy + CENTRE_ARM);
-  // the template's y points down: flipped about the board's height, pin 1 stays at the top
-  for (const [x, y] of templatePins(frame)) circle("PINS", x, H - y, frame.pinDiameterMm / 2);
+  // the template's y points down: flipped about the board's height, pin 1 stays at the top. With `inside`, a
+  // piece's pins inside the picture follow the frame's, in the order they are numbered.
+  for (const [x, y] of templatePins(frame, inside)) circle("PINS", x, H - y, frame.pinDiameterMm / 2);
   pair(0, "ENDSEC");
   pair(0, "EOF");
   return out.join("\r\n") + "\r\n";

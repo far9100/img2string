@@ -8,7 +8,8 @@ import { emphasizedWeights } from "../core/emphasis.ts";
 import { GAMUT_CLUSTERS, GAMUT_SAMPLES, GAMUT_THRESHOLD, gamutCheck, gamutPicture, summarize, type GamutSummary } from "../core/gamut.ts";
 import { toRgba8 } from "../core/image.ts";
 import { frameMask } from "../core/frame.ts";
-import { adjustTarget, blankShare, cropForFrame, importanceWeights, makeCropper, referencePicture, type Cropper } from "../core/preprocess.ts";
+import { placeInside, placeRes } from "../core/inside.ts";
+import { adjustTarget, blankShare, cropForFrame, importanceWeights, makeCropper, referencePicture, type Cropper, type Palette } from "../core/preprocess.ts";
 import { IDENTITY_CROP } from "../core/project.ts";
 import { sampleTarget, type SampleId } from "../core/targets.ts";
 import type { CropRequest, FromPre, TargetRequest, ToPre } from "./protocol.ts";
@@ -17,6 +18,10 @@ declare const self: DedicatedWorkerGlobalScope;
 
 let picture: { width: number; height: number; crop: Cropper } | null = null;
 let sample: SampleId | null = null;
+/** Counts the pictures opened, and the pins last placed with what they were placed for: a slider that moves
+ * asks for the target again and again, and none of the sliders moves a pin. */
+let opened = 0;
+let placed: { key: string; pins: number[] } | null = null;
 
 const post = (msg: FromPre, transfer: Transferable[] = []) => self.postMessage(msg, transfer);
 
@@ -30,6 +35,22 @@ function cropped(r: CropRequest): { picture: Float64Array; painted: Float64Array
   }
   // a sample is square and fills the grid: a rectangular frame around it is the whole of it
   return { picture: sampleTarget(sample ?? "face", r.res), painted: importanceWeights(r.res, r.preset, r.strokes, IDENTITY_CROP, r.res, r.res, r.frame) };
+}
+
+/**
+ * Where the pins inside the picture stand (DECISIONS D-60): placed on a grid of their own, from the picture as
+ * it is before any adjustment and the importance map as painted, so neither the sliders nor the working
+ * resolution move them.
+ */
+function pinsInside(r: TargetRequest, palette: Palette): number[] {
+  const want = r.inside;
+  if (!want || !(want.count > 0)) return [];
+  const key = JSON.stringify([opened, r.crop, r.frame, r.board, r.mode, r.threads, r.adjust.invert, r.preset, r.strokes, want]);
+  if (placed?.key === key) return placed.pins;
+  const res = placeRes(want.diameterMm), at = cropped({ res, frame: r.frame, crop: r.crop, board: r.board, preset: r.preset, strokes: r.strokes });
+  const pins = placeInside(referencePicture(at.picture, res, r.adjust.invert, palette), at.painted, { res, board: r.board, diameterMm: want.diameterMm, pinDiameterMm: want.pinDiameterMm, ...r.frame }, want.count);
+  placed = { key, pins };
+  return pins;
 }
 
 /** The weight map as a picture, drawn over the target: only what differs from the default is shown. Less than
@@ -52,10 +73,12 @@ self.onmessage = (e: MessageEvent<ToPre>) => {
     if (msg.t === "picture") {
       picture = { width: msg.width, height: msg.height, crop: makeCropper({ width: msg.width, height: msg.height, rgba: msg.rgba }) };
       sample = null;
+      opened++;
       post({ t: "ready", id: msg.id, width: msg.width, height: msg.height });
     } else if (msg.t === "sample") {
       picture = null;
       sample = msg.sample;
+      opened++;
       post({ t: "ready", id: msg.id, width: 0, height: 0 });
     } else if (msg.t === "crop") {
       const made = cropped(msg.request);
@@ -73,9 +96,10 @@ self.onmessage = (e: MessageEvent<ToPre>) => {
         gamutRgba = gamutPicture(report, r.res);
       }
       const rgba = toRgba8(target, px), weightRgba = weightPicture(weight, frameMask({ res: r.res, ...r.frame }));
+      const inside = pinsInside(r, palette);
       const transfer: Transferable[] = [target.buffer, weight.buffer, rgba.buffer, weightRgba.buffer];
       if (gamutRgba) transfer.push(gamutRgba.buffer);
-      post({ t: "target", id: msg.id, ticket: msg.ticket, res: r.res, target, weight, rgba, weightRgba, gamut, gamutRgba, blank }, transfer);
+      post({ t: "target", id: msg.id, ticket: msg.ticket, res: r.res, target, weight, rgba, weightRgba, gamut, gamutRgba, blank, inside }, transfer);
     }
   } catch (err) {
     post({ t: "error", id: msg.id, code: "internal", detail: err instanceof Error ? err.message : String(err) });

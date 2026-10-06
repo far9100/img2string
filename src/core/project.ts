@@ -2,7 +2,8 @@
 // A project file is read only through normalizeProject (missing fields take defaults, numbers are clamped,
 // unknown fields are dropped) and written only by serializeProject (fixed key order), so the same project is
 // always the same text. Pattern after img2shadow's core/params.ts. Extensions to §11 are in DECISIONS D-30.
-import { allowedPairs, clampAspect, pictureAspect, type FrameOptions, type FrameShape, type FrameSpec } from "./frame.ts";
+import { allowedPairs, clampAspect, isRound, joinRule, pictureAspect, pinOf, type FrameOptions, type FrameShape, type FrameSpec } from "./frame.ts";
+import { INSIDE_MAX } from "./inside.ts";
 import { hexToLinear, type Options } from "./stringart.ts";
 import { isSampleId, type SampleId } from "./targets.ts";
 
@@ -46,19 +47,26 @@ export type StopReason = (typeof STOP_REASONS)[number];
 export interface Result {
   /** generationKey() of the project this result was made from: a different key means the result is stale. */
   key: string;
-  /** One pin sequence per thread, 0-based pins, in winding order. */
+  /** One pin sequence per thread, 0-based pins, in winding order. On a piece with pins inside the picture a
+   * pin the thread reaches round the frame is held as -(pin + 1): read them with frame.ts's pinOf and isRound. */
   sequences: number[][];
+  /** Steps per thread: a sequence's length less one. */
   lines: number[];
   errorReduction: number;
   meanDeltaEOk: number;
   reason: StopReason;
+  /** The pins inside the picture these sequences were made for (D-60): x, y per pin as fractions of the
+   * frame's span, numbered on from the frame's pins. They are the piece's own, because where they stand was
+   * worked out from the picture, which a project file need not hold. Absent when there are none. */
+  inside?: number[];
 }
 
 /** The frame (§3): a circle of `diameterMm`, or a rectangle whose longer side is `diameterMm` and whose
- * width / height is `aspect`, always the picture's (DECISIONS D-58). */
+ * width / height is `aspect`, always the picture's (DECISIONS D-58). `inside` is how many pins to stand inside
+ * the picture as well (D-60); absent for none, so that a frame without them is what it always was. */
 export type Frame =
-  | { shape: "circle"; diameterMm: number; pins: number; pinDiameterMm: number }
-  | { shape: "rect"; diameterMm: number; pins: number; pinDiameterMm: number; aspect: number };
+  | { shape: "circle"; diameterMm: number; pins: number; pinDiameterMm: number; inside?: number }
+  | { shape: "rect"; diameterMm: number; pins: number; pinDiameterMm: number; aspect: number; inside?: number };
 
 /** A frame's shape for frame.ts: nothing for a circle, so that what is built from it stays as it always was. */
 export const frameSpec = (f: Frame): FrameSpec => (f.shape === "rect" ? { shape: "rect", aspect: f.aspect } : {});
@@ -85,7 +93,11 @@ export const LIMITS = {
   diameterMm: [200, 1000], pins: [64, 512], pinDiameterMm: [0.5, 5], widthMm: [0.05, 2], res: [64, 1200], maxLines: [1, 20000],
   threads: 6, scale: [0.2, 20], brightness: [-1, 1], contrast: [-1, 1], gamma: [0.2, 5], rangeCompression: [0.1, 1], saturation: [0, 3], unsharp: [0, 2],
   strokeWeight: [0, 3], strokeRadius: [0.002, 0.5], strokes: 4000, strokePoints: 4000, edges: [0, 2], tone: [0, 1], secondsPerLine: [1, 120], nameLength: 40,
+  inside: [0, INSIDE_MAX],
 } as const;
+
+/** A stored piece's lines may pass a pin this share of the clearance: see frame.ts's joinRule. */
+const STORED_SLACK = 0.999;
 
 /** With generator.allowRepeat, how often one thread may use the same pin pair (§3 "Repeats", §13.5). */
 export const MAX_REPEAT = 3;
@@ -167,11 +179,13 @@ export function normalizeProject(raw: unknown): Normalized {
   const fr = rec(src.frame), shape: FrameShape = fr.shape === "rect" ? "rect" : "circle";
   if (fr.shape !== undefined && fr.shape !== "circle" && fr.shape !== "rect") issues.add("frame-shape");
   // a rectangle's proportions are the picture's, so they are set below, once the picture is read
+  const inside = num(fr.inside, LIMITS.inside[0], LIMITS.inside[1], 0, "frame", true);
   const ring: Extract<Frame, { shape: "circle" }> = {
     shape: "circle",
     diameterMm: num(fr.diameterMm, LIMITS.diameterMm[0], LIMITS.diameterMm[1], def.frame.diameterMm, "frame"),
     pins: num(fr.pins, LIMITS.pins[0], LIMITS.pins[1], md.pins, "frame", true),
     pinDiameterMm: num(fr.pinDiameterMm, LIMITS.pinDiameterMm[0], LIMITS.pinDiameterMm[1], def.frame.pinDiameterMm, "frame"),
+    ...(inside ? { inside } : {}),
   };
   const thread = { widthMm: num(rec(src.thread).widthMm, LIMITS.widthMm[0], LIMITS.widthMm[1], def.thread.widthMm, "thread") };
 
@@ -274,19 +288,38 @@ export function normalizeProject(raw: unknown): Normalized {
 function normalizeResult(raw: unknown, p: Project): Result | null {
   const r = rec(raw);
   if (!Array.isArray(r.sequences) || r.sequences.length !== p.threads.length) return null;
-  const N = p.frame.pins, sequences: number[][] = [];
-  // on a rectangle, the pairs the generator may join (frame.ts); on a circle the minimum skip, as always
-  const ok = p.frame.shape === "rect" ? allowedPairs({ pins: N, minSkip: p.generator.minSkip, ...frameSpec(p.frame) }) : null;
+  const F = p.frame.pins, sequences: number[][] = [];
+  // the pins inside the picture the piece was made on: only a frame that asks for some can have any
+  let inside: number[] = [];
+  if (r.inside !== undefined) {
+    const list: unknown = r.inside;
+    if (!p.frame.inside || !Array.isArray(list) || list.length % 2 || list.length > 2 * LIMITS.inside[1] || !list.every((v) => typeof v === "number" && v >= 0 && v <= 1)) return null;
+    inside = list.slice() as number[];
+  }
+  const N = F + inside.length / 2;
+  // With pins inside, the pairs the generator may join there, asked pair by pair (D-60); on a rectangle, the
+  // table of the pairs it may join (frame.ts); on a circle the minimum skip, as always.
+  const may = inside.length
+    ? joinRule({ pins: F, minSkip: p.generator.minSkip, ...frameSpec(p.frame), inside, diameterMm: p.frame.diameterMm, threadWidthMm: p.thread.widthMm, pinDiameterMm: p.frame.pinDiameterMm }, STORED_SLACK)
+    : null;
+  const ok = !may && p.frame.shape === "rect" ? allowedPairs({ pins: F, minSkip: p.generator.minSkip, ...frameSpec(p.frame) }) : null;
   for (const s of r.sequences) {
     if (!Array.isArray(s) || s.length === 1) return null;
     for (let i = 0; i < s.length; i++) {
-      const v: unknown = s[i];
-      if (typeof v !== "number" || !Number.isInteger(v) || v < 0 || v >= N) return null;
-      if (i > 0 && ok) {
-        if (!ok[(s[i - 1] as number) * N + v]) return null;
+      const entry: unknown = s[i];
+      if (typeof entry !== "number" || !Number.isInteger(entry)) return null;
+      const v = pinOf(entry), u = i > 0 ? pinOf(s[i - 1] as number) : -1;
+      if (v >= N) return null;
+      if (isRound(entry)) {
+        // round the frame: only on a piece with pins inside, never where a thread begins, and between two pins of the frame
+        if (!may || i === 0 || u >= F || v >= F || u === v) return null;
+      } else if (i > 0 && may) {
+        if (!may(u, v)) return null;
+      } else if (i > 0 && ok) {
+        if (!ok[u * F + v]) return null;
       } else if (i > 0) {
-        const d = Math.abs(v - (s[i - 1] as number)) % N;
-        if (Math.min(d, N - d) < p.generator.minSkip) return null;
+        const d = Math.abs(v - u) % F;
+        if (Math.min(d, F - d) < p.generator.minSkip) return null;
       }
     }
     sequences.push(s.slice() as number[]);
@@ -300,6 +333,7 @@ function normalizeResult(raw: unknown, p: Project): Result | null {
     errorReduction: finite(r.errorReduction),
     meanDeltaEOk: finite(r.meanDeltaEOk),
     reason,
+    ...(inside.length ? { inside } : {}),
   };
 }
 
@@ -323,9 +357,12 @@ export function serializeProject(p: Project): string {
       preset: p.importance.preset, edges: p.importance.edges, tone: p.importance.tone,
       strokes: p.importance.strokes.map((s) => ({ w: s.w, r: round(s.r, 5), pts: s.pts.map((v) => round(v, 5)) })),
     },
-    frame: p.frame.shape === "rect"
-      ? { shape: "rect", diameterMm: p.frame.diameterMm, pins: p.frame.pins, pinDiameterMm: p.frame.pinDiameterMm, aspect: round(p.frame.aspect, 6) }
-      : { shape: "circle", diameterMm: p.frame.diameterMm, pins: p.frame.pins, pinDiameterMm: p.frame.pinDiameterMm },
+    frame: {
+      ...(p.frame.shape === "rect"
+        ? { shape: "rect", diameterMm: p.frame.diameterMm, pins: p.frame.pins, pinDiameterMm: p.frame.pinDiameterMm, aspect: round(p.frame.aspect, 6) }
+        : { shape: "circle", diameterMm: p.frame.diameterMm, pins: p.frame.pins, pinDiameterMm: p.frame.pinDiameterMm }),
+      ...(p.frame.inside ? { inside: p.frame.inside } : {}),
+    },
     thread: { widthMm: p.thread.widthMm },
     board: p.board,
     threads: p.threads.map((t) => ({ name: t.name, hex: t.hex, maxLines: t.maxLines })),
@@ -333,6 +370,7 @@ export function serializeProject(p: Project): string {
     result: p.result && {
       key: p.result.key, sequences: p.result.sequences, lines: p.result.lines,
       errorReduction: round(p.result.errorReduction, 6), meanDeltaEOk: round(p.result.meanDeltaEOk, 4), reason: p.result.reason,
+      ...(p.result.inside?.length ? { inside: p.result.inside.map((v) => round(v, 6)) } : {}),
     },
     player: { secondsPerLine: p.player.secondsPerLine, step: p.player.step },
     paper: p.paper,
@@ -357,6 +395,23 @@ export function targetKey(p: Project): string {
     mode: p.mode, sha: p.image.sha256, crop: p.image.crop, adjust: p.adjust, importance: p.importance, res: p.generator.res,
     board: p.board, threads: p.threads.map((t) => t.hex),
     ...(p.frame.shape === "rect" ? { frame: { shape: "rect", aspect: p.frame.aspect } } : {}),
+    // pins inside the picture come with the target, and where they stand goes by the frame's size and the pin's
+    ...(p.frame.inside ? { inside: { n: p.frame.inside, diameterMm: p.frame.diameterMm, pinDiameterMm: p.frame.pinDiameterMm } } : {}),
+  });
+}
+
+/**
+ * Everything the places of the pins inside the picture depend on (inside.ts): the picture and how it lies in the
+ * frame, the frame, the pin's thickness, how many, what the picture is compared with (the palette and invert)
+ * and the importance as painted. Not the adjustment sliders, the automatic emphasis or the working resolution:
+ * none of those moves a pin. A piece made with this key has its pins where a new run of the project would put
+ * them, so the new run can take the piece's own (the board may be full of nails already).
+ */
+export function placementKey(p: Project): string {
+  return stableStringify({
+    sha: p.image.sha256, crop: p.image.crop, mode: p.mode, board: p.board, threads: p.threads.map((t) => t.hex), invert: p.adjust.invert,
+    preset: p.importance.preset, strokes: p.importance.strokes,
+    frame: { ...frameSpec(p.frame), diameterMm: p.frame.diameterMm, pinDiameterMm: p.frame.pinDiameterMm, inside: p.frame.inside ?? 0 },
   });
 }
 
@@ -369,12 +424,26 @@ export function generationKey(p: Project): string {
   });
 }
 
-/** The §12 options of a project, and for a rectangular frame its shape with them. */
-export function toOptions(p: Project): FrameOptions {
+/**
+ * The §12 options of a project, and for a rectangular frame its shape with them.
+ *
+ * A frame that asks for pins inside the picture needs to be told where they are: `inside`, which the project's
+ * settings do not hold. There are two places they can come from (the target as it is now, and a made piece's
+ * own result), so the caller must say which: without a list this throws rather than make a piece with no pins
+ * inside, which would look like any other. An empty list is a real answer (the picture had no room for one).
+ * With such a frame a pair of pins is drawn once whatever the repeat setting says (D-60).
+ */
+export function toOptions(p: Project, inside?: ArrayLike<number>): FrameOptions {
+  const asks = (p.frame.inside ?? 0) > 0;
+  if (asks && !inside) throw new Error("the pins inside the picture were not given");
   return {
     res: p.generator.res, pins: p.frame.pins, diameterMm: p.frame.diameterMm, threadWidthMm: p.thread.widthMm,
     board: hexToLinear(p.board), threads: p.threads.map((t) => hexToLinear(t.hex)), maxLines: p.threads.map((t) => t.maxLines),
-    minSkip: p.generator.minSkip, allowRepeat: p.generator.allowRepeat,
+    minSkip: p.generator.minSkip, allowRepeat: asks ? false : p.generator.allowRepeat,
     ...frameSpec(p.frame),
+    ...(asks && inside!.length ? { inside: Array.from(inside!), pinDiameterMm: p.frame.pinDiameterMm } : {}),
   };
 }
+
+/** The options of a piece as it was made: with the pins inside the picture its own result holds. */
+export const madeOptions = (p: Project): FrameOptions => toOptions(p, p.result?.inside ?? []);

@@ -2,6 +2,11 @@
 // lines in winding order, and what to show at a given position. A position is the number of lines already
 // wound: 0 before the first line, plan.steps.length when the piece is finished. What the user sees and types
 // is a step of a thread, numbered as on the printed instructions (DECISIONS D-35).
+//
+// On a piece with pins inside the picture (DECISIONS D-60) a step may go round the frame instead of across the
+// picture: it is a step like any other here, marked `round`, and its two pins are read out of the sequence
+// with frame.ts's pinOf.
+import { isRound, pinOf } from "../core/frame.ts";
 import { clockHint } from "../core/instructions.ts";
 
 export interface Step {
@@ -10,6 +15,8 @@ export interface Step {
   line: number;
   from: number;
   to: number;
+  /** Present (and true) when the thread gets to `to` round the outside of the frame, not across the picture. */
+  round?: true;
 }
 
 export interface Plan {
@@ -24,7 +31,7 @@ export function buildPlan(sequences: readonly (readonly number[])[], pins: numbe
   const steps: Step[] = [], threads: Plan["threads"] = [];
   sequences.forEach((s, k) => {
     threads.push({ start: steps.length, lines: Math.max(0, s.length - 1) });
-    for (let i = 1; i < s.length; i++) steps.push({ thread: k, line: i, from: s[i - 1]!, to: s[i]! });
+    for (let i = 1; i < s.length; i++) steps.push({ thread: k, line: i, from: pinOf(s[i - 1]!), to: pinOf(s[i]!), ...(isRound(s[i]!) ? { round: true as const } : {}) });
   });
   return { pins, steps, threads };
 }
@@ -49,7 +56,11 @@ export interface View {
   tieOn: boolean;
   fromPin: number;
   nextPin: number;
+  /** The next pin's clock position on a round frame; empty for a pin that is not on the frame (the view asks
+   * instructions.ts's whereIs for those, and for a rectangular frame's sides). */
   nextClock: string;
+  /** The thread goes to the next pin round the outside of the frame, not across the picture. */
+  round: boolean;
   /** The pin after the next one, 0 when there is none in this thread. */
   thenPin: number;
   remainingLines: number;
@@ -59,7 +70,7 @@ export interface View {
 export function viewAt(plan: Plan, position: number): View {
   const total = plan.steps.length, p = clampPosition(plan, position), done = p >= total;
   const step = plan.steps[Math.min(p, total - 1)];
-  if (!step) return { position: 0, total: 0, done: true, thread: 0, threadLine: 0, threadLines: 0, step: 0, steps: 0, tieOn: false, fromPin: 0, nextPin: 0, nextClock: "", thenPin: 0, remainingLines: 0 };
+  if (!step) return { position: 0, total: 0, done: true, thread: 0, threadLine: 0, threadLines: 0, step: 0, steps: 0, tieOn: false, fromPin: 0, nextPin: 0, nextClock: "", round: false, thenPin: 0, remainingLines: 0 };
   const after = plan.steps[p + 1];
   return {
     position: p,
@@ -73,7 +84,8 @@ export function viewAt(plan: Plan, position: number): View {
     tieOn: !done && step.line === 1,
     fromPin: step.from + 1,
     nextPin: step.to + 1,
-    nextClock: clockHint(step.to, plan.pins),
+    nextClock: step.to < plan.pins ? clockHint(step.to, plan.pins) : "",
+    round: !done && step.round === true,
     thenPin: !done && after && after.thread === step.thread ? after.to + 1 : 0,
     remainingLines: total - p,
   };

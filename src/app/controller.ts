@@ -9,7 +9,7 @@ import {
   applyPreset, defaultOrder, freeCandidates, ORDER_SEARCH_MAX, ORDER_SEARCH_VERIFY, paletteWarnings, permutations, pickPalette, placeByLightness, presetById, proxyOptions, reorder, toHex,
 } from "../core/palette.ts";
 import {
-  frameSpec, generationKey, LIMITS, modeDefaults, normalizeProject, serializeProject, targetKey, toOptions,
+  frameSpec, generationKey, LIMITS, madeOptions, modeDefaults, normalizeProject, placementKey, serializeProject, targetKey, toOptions,
   type Crop, type Mode, type Project, type Result, type Stroke, type ThreadSpec,
 } from "../core/project.ts";
 import { frameBounds, frameMask } from "../core/frame.ts";
@@ -48,6 +48,8 @@ export class Controller {
   private openTicket = 0;
   /** Counts the automatic adjustments: one that was stopped must not go on when the next has begun. */
   private tuneTicket = 0;
+  /** The last answer of pinsFor() and what it was the answer to (the views ask at every redraw). */
+  private pinsKept: { project: Project; made: Project | null; target: AppState["target"]; any: boolean; pins: number[] } | null = null;
 
   get state(): AppState {
     return this.store.get();
@@ -292,12 +294,33 @@ export class Controller {
 
   // ---------- the target and the importance map
 
-  /** `gamut`: also check the colours (§6.3); only a colour picture has colours a palette can miss. */
-  private request(p: Project, res: number, gamut = p.mode === "colour"): TargetRequest {
+  /** `gamut`: also check the colours (§6.3); only a colour picture has colours a palette can miss. `pins`: also
+   * place the pins inside the picture, when the frame asks for some (D-60). */
+  private request(p: Project, res: number, gamut = p.mode === "colour", pins = true): TargetRequest {
     return {
       res, frame: frameSpec(p.frame), crop: p.image.crop, adjust: p.adjust, mode: p.mode, board: hexToLinear(p.board), threads: p.threads.map((th) => hexToLinear(th.hex)),
       preset: p.importance.preset, strokes: p.importance.strokes, edges: p.importance.edges, tone: p.importance.tone, gamut,
+      ...(pins && p.frame.inside ? { inside: { count: p.frame.inside, diameterMm: p.frame.diameterMm, pinDiameterMm: p.frame.pinDiameterMm } } : {}),
     };
+  }
+
+  /**
+   * The pins inside the picture that a run of this project stands on (D-60), x and y per pin. There are two
+   * places they can come from, and this is the one rule for which. When a piece has been made and nothing its
+   * pins depend on has changed since (placementKey), they are that piece's own: a new placement would put them
+   * in the same places, the board may hold them already, and a picture opened again, even in another browser,
+   * must not move them. Otherwise they are those of the target, which was placed for this project; while a new
+   * target is still on its way there are none, unless `any` asks for the last one's (to draw meanwhile).
+   */
+  pinsFor(project: Project = this.state.project, any = false): number[] {
+    if (!project.frame.inside) return [];
+    const s = this.state, kept = this.pinsKept;
+    if (kept && kept.project === project && kept.made === s.made && kept.target === s.target && kept.any === any) return kept.pins;
+    const made = s.made;
+    const pins = made?.result && made.frame.inside && placementKey(made) === placementKey(project) ? (made.result.inside ?? [])
+      : s.target && (any || s.target.key === targetKey(project)) ? s.target.inside : [];
+    this.pinsKept = { project, made, target: s.target, any, pins };
+    return pins;
   }
 
   /** The picture as it is, at `res`: for the automatic adjustment and the similarity number. */
@@ -356,7 +379,7 @@ export class Controller {
   async generate(resume = false): Promise<void> {
     const s = this.state;
     if (!this.canGenerate() || !s.target) return;
-    const project = s.project, options = toOptions(project), key = generationKey(project);
+    const project = s.project, options = toOptions(project, this.pinsFor(project)), key = generationKey(project);
     const from = resume && this.canContinue() ? project.result!.sequences : null;
     this.store.update((x) => ({ ...x, run: { status: "running", lines: options.threads.map(() => 0), error: 0, initialError: 0, rgba: null, res: options.res }, view: { ...x.view, tab: "result", player: false } }));
     let finished: Finished;
@@ -373,6 +396,8 @@ export class Controller {
     const result: Result = {
       key, sequences: finished.sequences, lines, errorReduction: errorReduction(finished.error, finished.initialError),
       meanDeltaEOk: finished.deltaE?.[1] ?? 0, reason: finished.reason,
+      // the piece keeps the pins inside the picture it was made on: they are the picture's, not the settings'
+      ...(options.inside ? { inside: Array.from(options.inside) } : {}),
     };
     const made: Project = { ...project, result, player: { ...project.player, step: 0 } };
     this.store.update((x) => ({ ...x, run: { ...x.run, status: "idle" }, made, result: null }));
@@ -391,7 +416,7 @@ export class Controller {
   /** The model's picture and numbers of a made piece: from the worker's last message, or by winding its
    * sequences into a fresh model (a result opened from a file, or a run whose worker had to be replaced). */
   private showMade(made: Project, finished: Finished | null): void {
-    const result = made.result!, o = toOptions(made), s = this.state;
+    const result = made.result!, o = madeOptions(made), s = this.state;
     const target = s.target && s.target.key === targetKey(made) ? s.target : null;
     let rgba = finished?.rgba ?? null, deltaE = finished?.deltaE ?? null;
     if (!rgba || (!deltaE && target)) {
@@ -422,7 +447,7 @@ export class Controller {
   private measure(made: Project): void {
     const s = this.state, target = s.target, result = made.result;
     if (!target || target.key !== targetKey(made) || !result || !result.lines.some((n) => n > 0)) return;
-    const o = toOptions(made);
+    const o = madeOptions(made);
     void this.pre.cropped(this.cropRequest(made, o.res), "measure").catch(() => null).then((cropped) => {
       // the unadjusted picture counts only if it is still the picture this piece was made from
       const original = cropped && this.state.target === target ? { picture: cropped.picture, painted: cropped.painted, mode: made.mode, invert: made.adjust.invert } : null;
@@ -437,7 +462,7 @@ export class Controller {
   renderTrue(slot: string, width: number, height: number, region: Region | null, sigmaMm: number): Promise<RenderedImage | null> {
     const made = this.state.made;
     if (!made?.result) return Promise.resolve(null);
-    return this.renderer.render(slot, toOptions(made), made.result.sequences, width, height, region, sigmaMm).catch(() => null);
+    return this.renderer.render(slot, madeOptions(made), made.result.sequences, width, height, region, sigmaMm).catch(() => null);
   }
 
   // ---------- the winding-order search (§6.3)
@@ -450,13 +475,13 @@ export class Controller {
   async searchOrder(): Promise<void> {
     const s = this.state;
     if (!this.canSearchOrder() || !s.target) return;
-    const project = s.project, o = toOptions(project), proxy = proxyOptions(o), orders = permutations(o.threads.length);
+    const project = s.project, o = toOptions(project, this.pinsFor(project)), proxy = proxyOptions(o), orders = permutations(o.threads.length);
     const hexes = project.threads.map((th) => th.hex);
     const total = orders.length + Math.min(ORDER_SEARCH_VERIFY, orders.length);
     this.store.update((x) => ({ ...x, order: { status: "running", done: 0, total, scores: null, hexes } }));
     const finish = (scores: OrderScore[] | null) => this.store.update((x) => ({ ...x, order: { status: "idle", done: 0, total: 0, scores, hexes } }));
     try {
-      const small = await this.pre.target(this.request(project, proxy.res, false), "order");
+      const small = await this.pre.target(this.request(project, proxy.res, false, false), "order");
       if (!small || this.state.order.status !== "running") return finish(null);
       this.pool ??= new ScorePool(generateWorker, defaultPoolSize(navigator.hardwareConcurrency));
       const tick = () => this.store.update((x) => (x.order.status === "running" ? { ...x, order: { ...x.order, done: x.order.done + 1 } } : x));
@@ -503,7 +528,7 @@ export class Controller {
   async autoAdjust(): Promise<void> {
     const s = this.state;
     if (!this.canAutoAdjust()) return;
-    const project = s.project, o = toOptions(project), small = tuningProxy(o), quick = small !== o, key = generationKey(project);
+    const project = s.project, o = toOptions(project, this.pinsFor(project)), small = tuningProxy(o), quick = small !== o, key = generationKey(project);
     const ticket = ++this.tuneTicket, alive = () => this.tuneTicket === ticket;
     const end = (last: TuneState["last"]) => { if (alive()) this.store.update((x) => ({ ...x, tune: { status: "idle", done: 0, total: 0, last } })); };
     const percent = (v: number) => Math.round(100 * Math.min(1, Math.max(0, v)));
@@ -611,8 +636,10 @@ export class Controller {
 
   async exportFile(kind: ExportKind): Promise<BuiltFile | null> {
     const s = this.state;
-    // the template belongs to the current frame; everything else to the made piece
-    const project = kind.startsWith("template") ? s.project : s.made;
+    // The template belongs to the current frame; everything else to the made piece. But pins inside the
+    // picture are a piece's own: when the frame asks for them, or the made piece has them, the template is
+    // that piece's too (its frame and its pins), on the paper chosen now (D-60).
+    const project = !kind.startsWith("template") ? s.made : this.templateOfPiece() ? (s.made?.result ? { ...s.made, paper: s.project.paper } : null) : s.project;
     if (!project) return null;
     this.store.update((x) => ({ ...x, busyExport: true }));
     try {
@@ -625,13 +652,19 @@ export class Controller {
     }
   }
 
+  /** Whether the nail template is the made piece's rather than the current frame's: see exportFile. */
+  templateOfPiece(): boolean {
+    const s = this.state;
+    return !!s.project.frame.inside || !!s.made?.result?.inside?.length;
+  }
+
   /** The made piece at true thread width as a PNG (§7.6), `size` pixels across. */
   async exportPreview(size = 2000): Promise<BuiltFile | null> {
     const made = this.state.made;
     if (!made?.result) return null;
     this.store.update((x) => ({ ...x, busyExport: true }));
     try {
-      const o = toOptions(made), res = made.generator.res, gridMm = made.frame.diameterMm / (res - 1);
+      const o = madeOptions(made), res = made.generator.res, gridMm = made.frame.diameterMm / (res - 1);
       if (made.frame.shape === "rect") {
         // the frame alone, not the empty grid beside it: its pixels, half a pixel beyond the outline all round
         const b = frameBounds(o), across = b.x1 - b.x0 + 1, down = b.y1 - b.y0 + 1, scale = size / Math.max(across, down);
@@ -672,6 +705,6 @@ export class Controller {
   /** The options of the made piece (for views that draw its lines). */
   madeOptions(): Options | null {
     const made = this.state.made;
-    return made ? toOptions(made) : null;
+    return made ? madeOptions(made) : null;
   }
 }

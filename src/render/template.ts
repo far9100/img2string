@@ -8,7 +8,12 @@
 // margin all round, the pins stand where frame.ts puts them (pin 1 next to the top left corner, numbers
 // growing clockwise), and what the round template draws along the radius is drawn at right angles to the side
 // a pin is on, out into the margin.
-import { frameSizeMm, pinSpacingMm, rectPinsMm } from "../core/frame.ts";
+//
+// A piece with pins inside the picture (DECISIONS D-60) has those drawn as well: the same small circle, a
+// cross through its centre (the nail goes where its two hairs cross) and, beside it, the pin's number, every
+// one of them, since there is no counting along a frame to find a pin inside. The pins stand at least 6 mm
+// apart (inside.ts), which is what keeps a number clear of the next pin and of the next number.
+import { frameSizeMm, insideMm, pinSpacingMm, rectPinsMm } from "../core/frame.ts";
 import { BOARD_MARGIN_MM, boardSizeMm } from "../core/instructions.ts";
 import type { Frame } from "../core/project.ts";
 import type { Drawing, Prim, Vec } from "./prims.ts";
@@ -22,6 +27,9 @@ const DIGIT_W = 0.555, DIGIT_H = 0.733;
  * the centre cross and of the cross-hair through every pin, the leader of pin 1 and its clockwise arrow. */
 const TICK_GAP = 1.6, TICK_5 = 2.5, TICK_10 = 4, CENTRE_ARM = 6, HAIR = 0.9, LEADER = 7.5, ARROW = 16;
 const NUMBER_MAX = 3, NUMBER_MIN = 1.5, ONE_SIZE = 4;
+/** For a pin inside the picture (mm): the arms of its cross beyond the pin, the gap between the cross and the
+ * number, and the number's size, smaller once it has four digits so that it is no wider. */
+const INSIDE_HAIR = 0.6, INSIDE_GAP = 0.4, INSIDE_NUMBER = 1.6, INSIDE_NUMBER_LONG = 1.3;
 
 /** Side of the board (D + 40 mm, §7.5), which is also the side of the drawing: the longer side for a rectangle. */
 export const boardSide = (frame: Frame): number => frame.diameterMm + 2 * BOARD_MARGIN_MM;
@@ -36,8 +44,13 @@ function pinDir(i: number, pins: number): Vec {
   return [Math.cos(a), Math.sin(a)];
 }
 
-/** Centre of every pin in the drawing's coordinates (mm), for tests and for the DXF. */
-export function templatePins(frame: Frame): [number, number][] {
+/** Centre of every pin in the drawing's coordinates (mm), for tests, the DXF and the lines: the frame's pins
+ * and, with `inside` (a piece's pins inside the picture, as its result holds them), those after them. */
+export function templatePins(frame: Frame, inside?: ArrayLike<number>): [number, number][] {
+  return inside && inside.length ? [...framePinsMm(frame), ...insidePinsMm(frame, inside)] : framePinsMm(frame);
+}
+
+function framePinsMm(frame: Frame): [number, number][] {
   if (frame.shape === "rect") {
     const { at } = rectPinsMm(frame);
     return Array.from({ length: frame.pins }, (_, i): [number, number] => [BOARD_MARGIN_MM + at[2 * i]!, BOARD_MARGIN_MM + at[2 * i + 1]!]);
@@ -46,6 +59,15 @@ export function templatePins(frame: Frame): [number, number][] {
   return Array.from({ length: frame.pins }, (_, i): [number, number] => {
     const [ux, uy] = pinDir(i, frame.pins);
     return [c + r * ux, c + r * uy];
+  });
+}
+
+/** The pins inside the picture: the frame's own box begins the margin in from the board's left and top. */
+function insidePinsMm(frame: Frame, inside: ArrayLike<number>): [number, number][] {
+  const box = frame.shape === "rect" ? { diameterMm: frame.diameterMm, shape: "rect" as const, aspect: frame.aspect } : { diameterMm: frame.diameterMm };
+  return Array.from({ length: inside.length >> 1 }, (_, j): [number, number] => {
+    const { left, top } = insideMm(box, inside, j);
+    return [BOARD_MARGIN_MM + left, BOARD_MARGIN_MM + top];
   });
 }
 
@@ -107,8 +129,24 @@ function rectLayers(frame: Frame): TemplateLayers {
   return { board, frame: outline, marks, pins };
 }
 
-export function templateLayers(frame: Frame): TemplateLayers {
-  if (frame.shape === "rect") return rectLayers(frame);
+export function templateLayers(frame: Frame, inside?: ArrayLike<number>): TemplateLayers {
+  const L = frame.shape === "rect" ? rectLayers(frame) : roundLayers(frame);
+  if (!inside || !inside.length) return L;
+  // every pin inside the picture: its circle, a cross through it, and its number to the right of it
+  const ink = TEMPLATE_INK, pr = frame.pinDiameterMm / 2, arm = pr + INSIDE_HAIR;
+  insidePinsMm(frame, inside).forEach(([x, y], j) => {
+    const label = String(frame.pins + j + 1), size = label.length > 3 ? INSIDE_NUMBER_LONG : INSIDE_NUMBER;
+    L.pins.push({ t: "circle", c: [x, y], r: pr, stroke: ink, width: 0.2 });
+    L.marks.push(
+      { t: "line", a: [x - arm, y], b: [x + arm, y], stroke: ink, width: 0.15 },
+      { t: "line", a: [x, y - arm], b: [x, y + arm], stroke: ink, width: 0.15 },
+      { t: "text", at: [x + arm + INSIDE_GAP, y + (DIGIT_H * size) / 2], text: label, size, color: ink },
+    );
+  });
+  return L;
+}
+
+function roundLayers(frame: Frame): TemplateLayers {
   const N = frame.pins, S = boardSide(frame), c = S / 2, r = frame.diameterMm / 2, pr = frame.pinDiameterMm / 2;
   const ink = TEMPLATE_INK;
   const at = (i: number, radius: number): Vec => {
@@ -163,8 +201,8 @@ export function templateLayers(frame: Frame): TemplateLayers {
 /** The nail template at 1:1 in mm, y down: the pin circle, every pin (a small circle of the pin's diameter
  * with a cross-hair through its centre), a tick and number every 5 pins and a bolder mark every 10, pin 1 at
  * the top with a clockwise arrow, a centre mark, and the board outline (a square of D + 40 mm). Numbers sit
- * outside the circle. */
-export function templateDrawing(frame: Frame): Drawing {
-  const L = templateLayers(frame), { width, height } = boardSize(frame);
+ * outside the circle. With `inside`, a piece's pins inside the picture too, each with its number. */
+export function templateDrawing(frame: Frame, inside?: ArrayLike<number>): Drawing {
+  const L = templateLayers(frame, inside), { width, height } = boardSize(frame);
   return { width, height, prims: [...L.board, ...L.frame, ...L.marks, ...L.pins] };
 }

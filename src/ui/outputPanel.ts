@@ -36,6 +36,8 @@ export function mountOutputPanel(root: HTMLElement, ctl: Controller, syncs: Sync
     button("out.previewPng", preview), button("out.linesSvg", get("lines-svg")),
   ];
   const needResult = h("p", { class: "hint", "data-i18n": "out.needResult", text: t("out.needResult") });
+  // D-60: with pins inside the picture the template is the made piece's, so there is none before there is a piece
+  const needPiece = h("p", { class: "hint", "data-i18n": "out.templateNeedsPiece", text: t("out.templateNeedsPiece") });
 
   const list = h("table", { class: "materials" });
   const seconds = numberField({ label: "player.secondsPerLine", unit: "s", min: 1, max: 120, step: 1, onCommit: (v) => ctl.setSecondsPerLine(v) });
@@ -48,6 +50,7 @@ export function mountOutputPanel(root: HTMLElement, ctl: Controller, syncs: Sync
       h("h3", { "data-i18n": "group.template", text: t("group.template") }),
       paper.el,
       h("div", { class: "stack" }, ...templateButtons),
+      needPiece,
       tx("out.printHint", "hint"),
     ),
     h("section", { class: "group" },
@@ -74,7 +77,9 @@ export function mountOutputPanel(root: HTMLElement, ctl: Controller, syncs: Sync
   syncs.push((s) => {
     const made = s.made, has = !!made?.result && made.result.lines.some((n) => n > 0), busy = s.busyExport;
     paper.set(s.project.paper);
-    for (const b of templateButtons) b.disabled = busy;
+    const noTemplate = ctl.templateOfPiece() && !made?.result;
+    for (const b of templateButtons) b.disabled = busy || noTemplate;
+    needPiece.hidden = !noTemplate;
     for (const b of pieceButtons) b.disabled = busy || !has;
     needResult.hidden = has;
     play.disabled = !has;
@@ -98,13 +103,17 @@ export function mountOutputPanel(root: HTMLElement, ctl: Controller, syncs: Sync
       rows.push(
         h("tr", { class: "total" }, h("th", { scope: "row", text: t("out.total") }), h("td", { text: t("out.lineCount", { n: m.totalLines }) }), h("td", { text: `${Math.ceil(m.totalLengthM)} m` })),
         h("tr", null, h("th", { scope: "row", text: t("out.nails") }), h("td", { colspan: 2, text: t("out.nailsValue", { n: m.nails, mm: m.nailLengthMm }) })),
+        // of a piece with pins inside the picture: how many of them stand where (D-60)
+        ...(m.nails > made!.frame.pins ? [h("tr", null, h("td", { colspan: 3, class: "detail", text: t("out.nailsWhere", { frame: made!.frame.pins, inside: m.nails - made!.frame.pins }) }))] : []),
         h("tr", null, h("th", { scope: "row", text: t("out.board") }), h("td", { colspan: 2, text: boardText(made!.frame) })),
         h("tr", null, h("th", { scope: "row", text: t("out.time") }), h("td", { colspan: 2, text: t("out.timeValue", { h: time.h, min: time.min }) })),
       );
     } else {
-      const frame = s.project.frame;
+      // no piece yet: what the board would take, the pins the picture has been given inside it among them (D-60)
+      const frame = s.project.frame, inside = ctl.pinsFor(s.project, true).length >> 1;
       rows.push(
-        h("tr", null, h("th", { scope: "row", text: t("out.nails") }), h("td", { colspan: 2, text: t("out.nailsValue", { n: frame.pins, mm: frame.pinDiameterMm <= 2 ? 25 : 30 }) })),
+        h("tr", null, h("th", { scope: "row", text: t("out.nails") }), h("td", { colspan: 2, text: t("out.nailsValue", { n: frame.pins + inside, mm: frame.pinDiameterMm <= 2 ? 25 : 30 }) })),
+        ...(inside ? [h("tr", null, h("td", { colspan: 3, class: "detail", text: t("out.nailsWhere", { frame: frame.pins, inside }) }))] : []),
         h("tr", null, h("th", { scope: "row", text: t("out.board") }), h("td", { colspan: 2, text: boardText(frame) })),
       );
     }

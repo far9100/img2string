@@ -17,6 +17,10 @@ export const EXPORT_KINDS: readonly ExportKind[] = ["template-pdf", "template-sv
 export const needsFont = (kind: ExportKind): boolean => kind === "template-pdf" || kind === "instructions-pdf";
 /** The kinds that need a generated result; the others only need the frame. */
 export const needsResult = (kind: ExportKind): boolean => kind.startsWith("instructions-") || kind === "lines-svg";
+/** Whether this file of this project cannot be built without a result: the kinds above, and the nail template
+ * of a frame that asks for pins inside the picture, whose places only a made piece has (DECISIONS D-60). A
+ * template of the frame alone would look right and leave those pins out. */
+export const needsPiece = (kind: ExportKind, project: Project): boolean => needsResult(kind) || !!project.frame.inside;
 
 export interface ExportInput {
   project: Project;
@@ -41,8 +45,8 @@ const utf8Marked = (s: string): Uint8Array => utf8(String.fromCharCode(0xfeff) +
  * lines SVG throw Error("no-result") when the project has no result; the template kinds never need one.
  */
 export async function buildFile(font: Uint8Array | null, input: ExportInput, kind: ExportKind): Promise<BuiltFile> {
-  const { project, lang, stem } = input;
-  if (needsResult(kind) && !project.result) throw new Error(NO_RESULT);
+  const { project, lang, stem } = input, inside = project.result?.inside;
+  if (needsPiece(kind, project) && !project.result) throw new Error(NO_RESULT);
   if (needsFont(kind) && !font) throw new Error("no-font");
   switch (kind) {
     case "template-pdf": {
@@ -50,10 +54,10 @@ export async function buildFile(font: Uint8Array | null, input: ExportInput, kin
       return { name: FILE.template(stem, "pdf"), mime: "application/pdf", bytes: await templatePdf(font!, project, lang) };
     }
     case "template-svg": {
-      return { name: FILE.template(stem, "svg"), mime: "image/svg+xml", bytes: utf8(templateSvg(project.frame, templateTitle(project.frame, lang))) };
+      return { name: FILE.template(stem, "svg"), mime: "image/svg+xml", bytes: utf8(templateSvg(project.frame, templateTitle(project.frame, lang, inside), inside)) };
     }
     case "template-dxf":
-      return { name: FILE.template(stem, "dxf"), mime: "image/vnd.dxf", bytes: utf8(templateDxf(project.frame)) };
+      return { name: FILE.template(stem, "dxf"), mime: "image/vnd.dxf", bytes: utf8(templateDxf(project.frame, inside)) };
     case "instructions-pdf": {
       const { instructionsPdf } = await import("./instructionsPdf.ts");
       return { name: FILE.instructions(stem, "pdf"), mime: "application/pdf", bytes: await instructionsPdf(font!, project, lang, stem) };

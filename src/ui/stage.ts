@@ -119,6 +119,24 @@ export function mountStage(root: HTMLElement, ctl: Controller, syncs: Sync[]): v
     ctx.restore();
   }
 
+  /** The pins inside the picture, as dots over it: where they would stand for this target, or do stand on the
+   * piece already made from it (D-60; the controller's pinsFor says which). Fractions of the frame's span. */
+  function dots(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, dpr: number, pins: readonly number[]): void {
+    if (!pins.length) return;
+    const res = Math.max(2, ctl.state.project.generator.res), k = (size * dpr) / res;
+    ctx.save();
+    ctx.fillStyle = themeColour("--ring");
+    ctx.strokeStyle = "rgba(255,255,255,0.85)";
+    ctx.lineWidth = dpr;
+    for (let j = 0; j < pins.length; j += 2) {
+      ctx.beginPath();
+      ctx.arc(x * dpr + (pins[j]! * (res - 1) + 0.5) * k, y * dpr + (pins[j + 1]! * (res - 1) + 0.5) * k, 2.2 * dpr, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
   function requestTruth(s: AppState, px: number): void {
     const made = s.made;
     if (!made?.result) return;
@@ -149,6 +167,7 @@ export function mountStage(root: HTMLElement, ctl: Controller, syncs: Sync[]): v
         drawImage(ctx, "weights", s.target.weightRgba, s.target.res, s.target.res, fx, fy, size, dpr);
         trim(ctx, s.project.frame, s.target.res, fx, fy, size, dpr);
         ring(ctx, fx, fy, size, dpr, s.project.frame.pins);
+        dots(ctx, fx, fy, size, dpr, ctl.pinsFor(s.project, true));
       } else message = s.pictureMissing ? t("picture.reopen") : t("run.preparing");
       if (live && live.length >= 2) {
         ctx.save();

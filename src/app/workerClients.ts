@@ -24,6 +24,8 @@ export interface TargetAnswer {
   gamutRgba: Uint8ClampedArray | null;
   /** How much of the unadjusted picture is like the bare board, 0..1. */
   blank: number;
+  /** Where the pins inside the picture stand, when the request asked for some (x, y per pin; else empty). */
+  inside: number[];
 }
 
 /** The picture through a crop before any adjustment, and the importance map as painted. */
@@ -74,7 +76,7 @@ export function createPreprocessClient(): PreprocessClient {
       tickets.set(slot, ticket);
       const m = await call({ t: "target", id: nextId++, ticket, request });
       if (m.t !== "target" || tickets.get(slot) !== ticket) return null;
-      return { res: m.res, target: m.target, weight: m.weight, rgba: m.rgba, weightRgba: m.weightRgba, gamut: m.gamut, gamutRgba: m.gamutRgba, blank: m.blank };
+      return { res: m.res, target: m.target, weight: m.weight, rgba: m.rgba, weightRgba: m.weightRgba, gamut: m.gamut, gamutRgba: m.gamutRgba, blank: m.blank, inside: m.inside };
     },
     async cropped(request, slot) {
       const name = `crop:${slot}`, ticket = (tickets.get(name) ?? 0) + 1;

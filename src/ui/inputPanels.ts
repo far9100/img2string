@@ -4,8 +4,9 @@ import type { Controller } from "../app/controller.ts";
 import type { AppState } from "../app/state.ts";
 import { SLIDER, type Tuning } from "../core/autoAdjust.ts";
 import { THREAD_PRESETS } from "../core/calibration.ts";
-import { frameSizeMm, pinSpacingMm } from "../core/frame.ts";
+import { frameSizeMm, pinSpacingMm, tooDenseForInside } from "../core/frame.ts";
 import { hueName, type GamutSummary } from "../core/gamut.ts";
+import { insideGapMm } from "../core/inside.ts";
 import { ORDER_SEARCH_MAX, PRESETS, presetOf, toHex } from "../core/palette.ts";
 import { MOSTLY_BLANK } from "../core/preprocess.ts";
 import { IMPORTANCE_PRESETS, isHex, LIMITS, maxMinSkip, maxResolution, NEUTRAL_ADJUST, targetKey, type ThreadSpec } from "../core/project.ts";
@@ -270,6 +271,8 @@ export function mountPalettePanel(root: HTMLElement, ctl: Controller, syncs: Syn
 /** A picture whose long side is this many times its short side is told that a round frame cannot show all of
  * it (D-58): at 1.1 the circle shows 71 % of the picture, at 4:3 it shows 59 %. */
 const NOT_SQUARE = 1.1;
+/** How many pins inside the picture the advice for a line drawing offers: the number that was measured (D-60). */
+const INSIDE_OFFER = 300;
 
 export function mountSettingsPanel(root: HTMLElement, ctl: Controller, syncs: Sync[], calibrate: () => void): void {
   const D = numberField({ label: "frame.diameter", unit: "mm", min: LIMITS.diameterMm[0], max: LIMITS.diameterMm[1], step: 10, onCommit: (v) => ctl.set(["frame", "diameterMm"], v) });
@@ -285,6 +288,9 @@ export function mountSettingsPanel(root: HTMLElement, ctl: Controller, syncs: Sy
   const shapeNote = h("p", { class: "advice" });
   const useRect = button("frame.useRect", () => ctl.set(["frame", "shape"], "rect"));
   const shapeAdvice = h("div", { class: "frame-advice" }, shapeNote, h("div", { class: "row wrap" }, useRect));
+  // D-60: pins inside the picture as well, placed on its strokes; how many stand is said below the field
+  const inside = numberField({ label: "frame.inside", min: LIMITS.inside[0], max: LIMITS.inside[1], step: 10, hint: "frame.insideHint", onCommit: (v) => ctl.set(["frame", "inside"], v) });
+  const insideNote = h("p", { class: "hint inside-note", role: "status" });
   // §6.6: typical widths, or the width measured from a photograph of a test patch
   const kind = selectField({
     label: "thread.kind",
@@ -301,6 +307,9 @@ export function mountSettingsPanel(root: HTMLElement, ctl: Controller, syncs: Sy
   const blankNote = h("p", { class: "advice" });
   const addWhite = button("tune.addWhite", () => ctl.applyPreset("mono-black-white"));
   const blank = h("div", { class: "blank" }, blankNote, h("div", { class: "row wrap" }, addWhite));
+  // D-60: such a picture is also where pins inside it help most; offered until there are some
+  const addInside = button("tune.addInside", () => ctl.set(["frame", "inside"], INSIDE_OFFER));
+  const sparse = h("div", { class: "sparse" }, tx("tune.insideNote", "advice"), h("div", { class: "row wrap" }, addInside));
 
   // the sliders the automatic adjustment sets take their ranges from it (SLIDER), so it can never leave them
   const adjust = (key: Exclude<keyof Tuning, "edges" | "tone">, format: (v: number) => string) =>
@@ -340,12 +349,14 @@ export function mountSettingsPanel(root: HTMLElement, ctl: Controller, syncs: Sy
   const res = numberField({ label: "gen.res", unit: "px", min: LIMITS.res[0], max: LIMITS.res[1], step: 10, hint: "gen.resHint", onCommit: (v) => ctl.set(["generator", "res"], v) });
   const skip = numberField({ label: "gen.minSkip", min: 1, max: 255, step: 1, hint: "gen.minSkipHint", onCommit: (v) => ctl.set(["generator", "minSkip"], v) });
   const repeat = checkField({ label: "gen.repeat", onChange: (v) => ctl.set(["generator", "allowRepeat"], v) });
+  const repeatInside = tx("gen.repeatInside", "hint");
   const notes = h("ul", { class: "issues" });
 
   root.append(
     h("section", { class: "group" },
       h("h3", { "data-i18n": "group.frame", text: t("group.frame") }),
       shape.el, h("div", { class: "pair" }, D.el, pins.el), h("div", { class: "pair" }, width.el, pinD.el), spacing, shapeAdvice,
+      inside.el, insideNote,
       kind.el, h("div", { class: "row wrap" }, measure),
     ),
     h("section", { class: "group tune" },
@@ -354,6 +365,7 @@ export function mountSettingsPanel(root: HTMLElement, ctl: Controller, syncs: Sy
       tuneStatus,
       tx("tune.hint", "hint"),
       blank,
+      sparse,
     ),
     h("details", { class: "group" },
       h("summary", { "data-i18n": "group.adjust", text: t("group.adjust") }),
@@ -367,7 +379,7 @@ export function mountSettingsPanel(root: HTMLElement, ctl: Controller, syncs: Sy
     ),
     h("details", { class: "group" },
       h("summary", { "data-i18n": "group.generator", text: t("group.generator") }),
-      h("div", { class: "pair" }, res.el, skip.el), repeat.el, tx("gen.repeatHint", "hint"), notes,
+      h("div", { class: "pair" }, res.el, skip.el), repeat.el, tx("gen.repeatHint", "hint"), repeatInside, notes,
     ),
   );
 
@@ -394,6 +406,18 @@ export function mountSettingsPanel(root: HTMLElement, ctl: Controller, syncs: Sy
     const src = s.source, long = src ? Math.max(src.width, src.height) : 0, short = src ? Math.min(src.width, src.height) : 0;
     shapeAdvice.hidden = !(src && !src.sample && !rect && short > 0 && long / short >= NOT_SQUARE);
     if (!shapeAdvice.hidden) shapeNote.textContent = t("frame.notSquare", { w: src!.width, h: src!.height, percent: Math.round((100 * (Math.PI / 4) * short) / long) });
+    // the pins inside the picture: how many were asked for, and how many stand (the worker places them with the
+    // target, so until that has come there is nothing to say but that it is on its way)
+    const asked = p.frame.inside ?? 0;
+    inside.set(asked);
+    insideNote.hidden = !asked;
+    if (asked) {
+      const placed = ctl.pinsFor(p).length / 2, gap = insideGapMm(p.frame.pinDiameterMm), ready = !!s.target && s.target.key === targetKey(p);
+      insideNote.textContent = tooDenseForInside(p.frame, p.thread.widthMm) ? t("frame.insideDense", { gap: one(pinSpacingMm(p.frame).along) })
+        : !ready && !placed ? t("run.preparing")
+        : placed < asked ? t("frame.insideFewer", { n: placed, asked, gap })
+        : t("frame.insidePlaced", { n: placed, gap });
+    }
     const tuning = s.tune.status === "running", last = s.tune.last && s.tune.last.key === targetKey(p) ? s.tune.last : null;
     tune.hidden = tuning;
     tune.disabled = !ctl.canAutoAdjust();
@@ -404,7 +428,9 @@ export function mountSettingsPanel(root: HTMLElement, ctl: Controller, syncs: Sy
     // of the picture before any adjustment, so the last target's is still right while a slider moves
     const share = s.target ? s.target.blank : 0;
     blank.hidden = !(share >= MOSTLY_BLANK && presetOf(p) === "mono-black");
-    if (!blank.hidden) blankNote.textContent = t("tune.blank", { percent: Math.round(100 * share) });
+    // with pins inside the picture a line no longer crosses the whole frame: the advice says what is left to gain
+    if (!blank.hidden) blankNote.textContent = t(asked ? "tune.blankInside" : "tune.blank", { percent: Math.round(100 * share) });
+    sparse.hidden = !(share >= MOSTLY_BLANK && !asked);
     brightness.set(p.adjust.brightness);
     contrast.set(p.adjust.contrast);
     gamma.set(p.adjust.gamma);
@@ -420,7 +446,10 @@ export function mountSettingsPanel(root: HTMLElement, ctl: Controller, syncs: Sy
     undo.disabled = clear.disabled = !p.importance.strokes.length;
     edges.set(p.importance.edges);
     tone.set(p.importance.tone);
-    repeat.set(p.generator.allowRepeat);
+    // with pins inside the picture a pair of pins is drawn once whatever this says (D-60)
+    repeat.set(p.generator.allowRepeat && !asked);
+    repeat.input.disabled = !!asked;
+    repeatInside.hidden = !asked;
     res.set(p.generator.res);
     res.input.max = String(Math.min(LIMITS.res[1], maxResolution(p.frame.diameterMm, p.thread.widthMm)));
     skip.set(p.generator.minSkip);

@@ -194,20 +194,21 @@ export function bandPrims(plan: TilePlan, texts: BandTexts, measure: (s: string,
 }
 
 /** The words on page `index` (0-based) of the template. */
-export function bandTexts(frame: Project["frame"], plan: TilePlan, index: number, lang: Lang): BandTexts {
+export function bandTexts(frame: Project["frame"], plan: TilePlan, index: number, lang: Lang, inside?: ArrayLike<number>): BandTexts {
   const n = plan.tiles.length, tile = plan.tiles[index]!;
   const print = t("pdf.printActual", {}, undefined, lang);
   return {
-    title: templateTitle(frame, lang),
+    title: templateTitle(frame, lang, inside),
     page: n > 1 ? t("pdf.tile", { p: index + 1, n, row: tile.row + 1, col: tile.col + 1 }, undefined, lang) : t("pdf.page", { p: 1, n: 1 }, undefined, lang),
     note: n > 1 ? `${print} ${t("tpl.join", {}, undefined, lang)}` : print,
   };
 }
 
 export async function templatePdf(fontBytes: Uint8Array, project: Project, lang: Lang): Promise<Uint8Array> {
-  const frame = project.frame;
-  const drawing = templateDrawing(frame), plan = templatePlan(frame, project.paper);
-  const { doc, font } = await newDoc(fontBytes, templateTitle(frame, lang), lang);
+  // a piece with pins inside the picture has them on its template: they are its result's (D-60)
+  const frame = project.frame, inside = project.result?.inside;
+  const drawing = templateDrawing(frame, inside), plan = templatePlan(frame, project.paper);
+  const { doc, font } = await newDoc(fontBytes, templateTitle(frame, lang, inside), lang);
   const prims = [...drawing.prims, ...markPrims(stripMarks(plan, drawing.width, drawing.height, drawing.prims))];
   const boxes = prims.map(primBox);
   plan.tiles.forEach((tile, index) => {
@@ -218,7 +219,7 @@ export async function templatePdf(fontBytes: Uint8Array, project: Project, lang:
     });
     const [ox, oy] = tileOrigin(plan, tile);
     clipRect(page, plan.contentX - BLEED, plan.contentY - BLEED, plan.contentW + 2 * BLEED, plan.contentH + 2 * BLEED, () => drawPrims(page, font, shown, ox, oy));
-    drawPrims(page, font, [...trimPrims(plan, tile), ...bandPrims(plan, bandTexts(frame, plan, index, lang), (s, size) => textWidthMm(font, s, size))]);
+    drawPrims(page, font, [...trimPrims(plan, tile), ...bandPrims(plan, bandTexts(frame, plan, index, lang, inside), (s, size) => textWidthMm(font, s, size))]);
   });
   return save(doc);
 }

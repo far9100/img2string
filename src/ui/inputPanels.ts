@@ -4,7 +4,7 @@ import type { Controller } from "../app/controller.ts";
 import type { AppState } from "../app/state.ts";
 import { SLIDER, type Tuning } from "../core/autoAdjust.ts";
 import { THREAD_PRESETS } from "../core/calibration.ts";
-import { frameSizeMm, pinSpacingMm, tooDenseForInside } from "../core/frame.ts";
+import { frameSizeMm, pinSpacingMm } from "../core/frame.ts";
 import { hueName, type GamutSummary } from "../core/gamut.ts";
 import { insideGapMm } from "../core/inside.ts";
 import { ORDER_SEARCH_MAX, PRESETS, presetOf, toHex } from "../core/palette.ts";
@@ -289,7 +289,7 @@ export function mountSettingsPanel(root: HTMLElement, ctl: Controller, syncs: Sy
   const useRect = button("frame.useRect", () => ctl.set(["frame", "shape"], "rect"));
   const shapeAdvice = h("div", { class: "frame-advice" }, shapeNote, h("div", { class: "row wrap" }, useRect));
   // D-60: pins inside the picture as well, placed on its strokes; how many stand is said below the field
-  const inside = numberField({ label: "frame.inside", min: LIMITS.inside[0], max: LIMITS.inside[1], step: 10, hint: "frame.insideHint", onCommit: (v) => ctl.set(["frame", "inside"], v) });
+  const inside = numberField({ label: "frame.inside", min: LIMITS.inside[0], max: LIMITS.inside[1], step: 10, hint: "frame.insideHint", onCommit: (v) => ctl.setInside(v) });
   const insideNote = h("p", { class: "hint inside-note", role: "status" });
   // §6.6: typical widths, or the width measured from a photograph of a test patch
   const kind = selectField({
@@ -308,7 +308,7 @@ export function mountSettingsPanel(root: HTMLElement, ctl: Controller, syncs: Sy
   const addWhite = button("tune.addWhite", () => ctl.applyPreset("mono-black-white"));
   const blank = h("div", { class: "blank" }, blankNote, h("div", { class: "row wrap" }, addWhite));
   // D-60: such a picture is also where pins inside it help most; offered until there are some
-  const addInside = button("tune.addInside", () => ctl.set(["frame", "inside"], INSIDE_OFFER));
+  const addInside = button("tune.addInside", () => ctl.setInside(INSIDE_OFFER));
   const sparse = h("div", { class: "sparse" }, tx("tune.insideNote", "advice"), h("div", { class: "row wrap" }, addInside));
 
   // the sliders the automatic adjustment sets take their ranges from it (SLIDER), so it can never leave them
@@ -413,8 +413,7 @@ export function mountSettingsPanel(root: HTMLElement, ctl: Controller, syncs: Sy
     insideNote.hidden = !asked;
     if (asked) {
       const placed = ctl.pinsFor(p).length / 2, gap = insideGapMm(p.frame.pinDiameterMm), ready = !!s.target && s.target.key === targetKey(p);
-      insideNote.textContent = tooDenseForInside(p.frame, p.thread.widthMm) ? t("frame.insideDense", { gap: one(pinSpacingMm(p.frame).along) })
-        : !ready && !placed ? t("run.preparing")
+      insideNote.textContent = !ready && !placed ? t("run.preparing")
         : placed < asked ? t("frame.insideFewer", { n: placed, asked, gap })
         : t("frame.insidePlaced", { n: placed, gap });
     }

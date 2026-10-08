@@ -13,17 +13,23 @@
 // The pins and the pairs a thread may join come from frame.ts: stringart.ts's circle and its minimum skip for a
 // round frame (so nothing here changes for one), and their like for a rectangular frame (DECISIONS D-58).
 //
-// A piece with pins inside the picture (DECISIONS D-60) runs the same steps over all its pins, with three
+// A piece with pins inside the picture (DECISIONS D-60) runs the same steps over all its pins, with four
 // differences. A thread draws a pair of pins once (the repeat setting does not count: a second run between the
 // same two pins is thread on thread). Whether a line can have changed a remembered gain is decided by whether
-// the two segments cross, since pins inside are not in order round an outline. And when no line from where the
+// the two segments cross, since pins inside are not in order round an outline. When no line from where the
 // threads are helps, a thread makes a trip (travel.ts) before the run gives up: so a sequence can hold steps
 // round the frame (frame.ts's roundTo) and steps along a line the thread has drawn before, neither of which
-// draws anything. A run with trips, stopped and continued, is a run like any other from there on, but need not
-// be the one that was not stopped: which trips are found depends on what was scored before.
+// draws anything. And with several threads a line is left to the thread that gains most from it (D-61): a
+// thread sees only the lines round its pin, so without that rule the thread that happens to be near draws what
+// another colour should, a grey picture in magenta where the black thread has not been yet.
+// Such a piece's lines are scored by gain(), from two numbers every pixel keeps for every thread: Model.gain()
+// but for the last digits, and a fifth of the arithmetic. So it is held to a search written straight down
+// (the tests'), not to generate(), which has no pins inside the picture.
+// A run with trips, stopped and continued, is a run like any other from there on, but need not be the one
+// that was not stopped: which trips are found depends on what was scored before.
 import { allowedPairs, aroundFrame, framePins, insideCount, isRound, pinCount, pinOf, roundTo, type FrameOptions } from "./frame.ts";
 import { coverageAlpha, Model, rasterLine } from "./stringart.ts";
-import { buildGraph, pairIndex, Planner, type Graph } from "./travel.ts";
+import { buildGraph, pairIndex, Planner, Ranking, type Graph } from "./travel.ts";
 
 export interface Outcome {
   /** Why the run ended: nothing lowers the error any more, a budget ran out while lines would still help, or
@@ -82,15 +88,27 @@ export class GreedyRun {
   private finished = false;
 
   // only with pins inside the picture
-  /** The allowed pairs as lists, the pairs each thread has drawn, and the gain of every pair when the thread
-   * last scored it. */
+  /** The allowed pairs as lists, the pairs each thread has drawn, and what every pair was worth to the thread
+   * when it last looked: its gain (known 1) or worth() of it (known 2), with the number of lines drawn by then. */
   private readonly graph: Graph | null;
   private readonly drawn: Uint8Array[];
   private readonly bound: Float64Array[];
+  private readonly known: Uint8Array[];
+  private readonly at: Int32Array[];
+  /** For every pixel, the number of the line last drawn over it (from 1): a pair is worth what it was as long
+   * as none has been drawn over its own pixels since. */
+  private readonly touched: Int32Array | null;
+  private marks = 0;
+  /** For every thread and pixel, what a line of that thread gains there, as two numbers: coverage w of the
+   * pixel gains w x rise - w^2 x curve (see weigh()). */
+  private readonly rise: Float64Array[];
+  private readonly curve: Float64Array[];
   private readonly planner: Planner | null;
   private readonly pace: number[];
   /** Threads whose last search for a trip found one that was worth making but too long for the budget. */
   private readonly cramped: Uint8Array;
+  /** Several threads: a line is left to the thread that gains most from it. */
+  private readonly rivals: boolean;
 
   constructor(o: FrameOptions, target: Float64Array, weight: Float64Array, resume?: readonly (readonly number[])[] | null, extras: Extras = {}) {
     const F = o.pins, N = pinCount(o), K = o.threads.length, pinned = insideCount(o) > 0;
@@ -119,12 +137,19 @@ export class GreedyRun {
     const pairs = this.graph ? this.graph.pu.length : 0;
     this.drawn = o.threads.map(() => new Uint8Array(pairs));
     this.bound = o.threads.map(() => new Float64Array(pairs));
+    this.known = o.threads.map(() => new Uint8Array(pairs));
+    this.at = o.threads.map(() => new Int32Array(pairs));
+    this.touched = pinned ? new Int32Array(o.res * o.res) : null;
+    this.rise = o.threads.map(() => new Float64Array(pinned ? o.res * o.res : 0));
+    this.curve = o.threads.map(() => new Float64Array(pinned ? o.res * o.res : 0));
+    if (pinned) for (let px = 0; px < o.res * o.res; px++) this.weigh(px);
     this.planner = this.graph && extras.travel !== false ? new Planner(this.graph, (a, b) => aroundFrame(o, a, b).length) : null;
     this.pace = o.threads.map((c) => {
       const contrast = ((c[0] - o.board[0]) ** 2 + (c[1] - o.board[1]) ** 2 + (c[2] - o.board[2]) ** 2) / 3;
       return TRAVEL_STEP * this.alpha * this.alpha * Math.max(TRAVEL_FLOOR, contrast);
     });
     this.cramped = new Uint8Array(K);
+    this.rivals = pinned && K > 1;
     if (resume && resume.some((s) => s.length > 0)) this.replay(resume);
   }
 
@@ -161,11 +186,13 @@ export class GreedyRun {
     });
     this.started = true;
     for (const v of this.valid) v.fill(0);
-    // what a trip goes by: every pair as it scores now
+    // what a trip goes by: every pair as it is worth now
     if (g && this.planner) {
+      for (let k = 0; k < this.K; k++) this.scoreAll(k);
+      if (this.rivals) this.claim();
       for (let k = 0; k < this.K; k++) {
         const bound = this.bound[k]!, drawn = this.drawn[k]!;
-        for (let e = 0; e < bound.length; e++) bound[e] = drawn[e] ? 0 : this.score(k, g.pu[e]!, g.pv[e]!);
+        for (let e = 0; e < bound.length; e++) if (drawn[e]) bound[e] = 0;
       }
     }
   }
@@ -216,6 +243,147 @@ export class GreedyRun {
     return Math.hypot(px - ax - t * dx, py - ay - t * dy);
   }
 
+  /**
+   * What a line gains at pixel p, for every thread, as things are there. Model.gain() says: with coverage w the
+   * composite moves by d = w x e, where e = (1 - a_k) x U_k x (c_k - below_k), and the weighted squared error
+   * falls by -wt x (2 (C - T) . d + d . d). That is w x rise - w^2 x curve with rise = -2 wt (C - T) . e and
+   * curve = wt e . e, which do not depend on the line: so they are worked out once for a pixel, and again when
+   * a line has been drawn over it.
+   */
+  private weigh(p: number): void {
+    const m = this.model, q = 3 * p, wt = m.Wt[p]!, C = m.C, T = m.T;
+    for (let k = 0; k < this.K; k++) {
+      if (wt === 0) { this.rise[k]![p] = 0; this.curve[k]![p] = 0; continue; }
+      const c = m.o.threads[k]!, B = m.below[k]!, s = (1 - m.a[k]![p]!) * m.U[k]![p]!;
+      const e0 = s * (c[0] - B[q]!), e1 = s * (c[1] - B[q + 1]!), e2 = s * (c[2] - B[q + 2]!);
+      this.rise[k]![p] = -2 * wt * ((C[q]! - T[q]!) * e0 + (C[q + 1]! - T[q + 1]!) * e1 + (C[q + 2]! - T[q + 2]!) * e2);
+      this.curve[k]![p] = wt * (e0 * e0 + e1 * e1 + e2 * e2);
+    }
+  }
+
+  /** The gain of the line between pins u and v for thread k on a piece with pins inside: score()'s pixels and
+   * coverages, each pixel's gain from weigh(). The same number as score() but for the last digits. */
+  private gain(k: number, u: number, v: number): number {
+    const P = this.P, res = this.res, rise = this.rise[k]!, curve = this.curve[k]!;
+    const x0 = P[2 * u]!, y0 = P[2 * u + 1]!, x1 = P[2 * v]!, y1 = P[2 * v + 1]!;
+    const steep = Math.abs(y1 - y0) > Math.abs(x1 - x0);
+    let a0 = steep ? y0 : x0, a1 = steep ? y1 : x1, b0 = steep ? x0 : y0, b1 = steep ? x1 : y1;
+    if (a1 < a0) { let t = a0; a0 = a1; a1 = t; t = b0; b0 = b1; b1 = t; }
+    const slope = a1 === a0 ? 0 : (b1 - b0) / (a1 - a0);
+    const per = this.alpha * Math.sqrt(1 + slope * slope);
+    const end = Math.floor(a1);
+    let g = 0;
+    for (let a = Math.ceil(a0); a <= end; a++) {
+      const b = b0 + slope * (a - a0), bf = Math.floor(b), f = b - bf;
+      if (1 - f > 0 && bf >= 0 && bf < res) {
+        const p = steep ? a * res + bf : bf * res + a, w = per * (1 - f);
+        g += w * rise[p]! - w * w * curve[p]!;
+      }
+      if (f > 0 && bf + 1 >= 0 && bf + 1 < res) {
+        const p = steep ? a * res + bf + 1 : (bf + 1) * res + a, w = per * f;
+        g += w * rise[p]! - w * w * curve[p]!;
+      }
+    }
+    return g;
+  }
+
+  /** Whether one of the lines drawn after the first `since` shares a pixel with the line between pins u and v:
+   * the pixels of gain(), in its order. */
+  private changed(u: number, v: number, since: number): boolean {
+    const P = this.P, res = this.res, touched = this.touched!;
+    const x0 = P[2 * u]!, y0 = P[2 * u + 1]!, x1 = P[2 * v]!, y1 = P[2 * v + 1]!;
+    const steep = Math.abs(y1 - y0) > Math.abs(x1 - x0);
+    let a0 = steep ? y0 : x0, a1 = steep ? y1 : x1, b0 = steep ? x0 : y0, b1 = steep ? x1 : y1;
+    if (a1 < a0) { let t = a0; a0 = a1; a1 = t; t = b0; b0 = b1; b1 = t; }
+    const slope = a1 === a0 ? 0 : (b1 - b0) / (a1 - a0), end = Math.floor(a1);
+    for (let a = Math.ceil(a0); a <= end; a++) {
+      const b = b0 + slope * (a - a0), bf = Math.floor(b), f = b - bf;
+      if (1 - f > 0 && bf >= 0 && bf < res && touched[steep ? a * res + bf : bf * res + a]! > since) return true;
+      if (f > 0 && bf + 1 >= 0 && bf + 1 < res && touched[steep ? a * res + bf + 1 : (bf + 1) * res + a]! > since) return true;
+    }
+    return false;
+  }
+
+  /**
+   * What the line of pair e is worth to thread k as things are. Its gain; but among rivals, where another
+   * thread would gain more from the same line (or as much, and comes before k), what k would lose by taking it
+   * from that thread: nothing above zero. Every thread counts, also one whose budget is spent or that has drawn
+   * the pair already: the line is that colour's, and when that colour cannot have it, nobody draws it in another.
+   * What it finds is kept (`keep` false: nothing is, the asking leaves no trace), and what was kept is the
+   * answer while no line has been drawn over the pair since. A gain of no more than `floor` is given back as
+   * it is, without asking whose the line is: the caller looks for more than that, and the worth is no higher.
+   *
+   * A thread is not told when a pair it was kept from becomes its own (the other thread has had its fill
+   * there). It finds out when it next stands on one of the pair's pins. Telling it, at the moment a run would
+   * otherwise end, was measured on four pictures: up to 400 more steps and the same similarity to a tenth of
+   * a point (D-61).
+   */
+  private rate(k: number, e: number, keep = true, floor = -Infinity): number {
+    const g = this.graph!, u = g.pu[e]!, v = g.pv[e]!, bound = this.bound[k]!, known = this.known[k]![e]!;
+    const same = known !== 0 && !this.changed(u, v, this.at[k]![e]!);
+    if (same && known === 2) return bound[e]!;
+    const own = same ? bound[e]! : this.gain(k, u, v);
+    let value = own, asked: 1 | 2 = 2;
+    if (this.rivals && own > 0) {
+      if (own > floor) {
+        let rival = 0, by = -1;
+        for (let j = 0; j < this.K; j++) {
+          if (j === k) continue;
+          const other = this.gain(j, u, v);
+          if (other > rival) { rival = other; by = j; }
+        }
+        if (rival > own || (rival === own && by < k)) value = own - rival;
+      } else asked = 1;
+    }
+    if (keep) {
+      bound[e] = value;
+      this.known[k]![e] = asked;
+      this.at[k]![e] = this.marks;
+    }
+    return value;
+  }
+
+  /** What every pair gains thread k as things are, by itself: among rivals claim() or rate() has yet to say
+   * whose each is. */
+  private scoreAll(k: number): void {
+    const g = this.graph!, bound = this.bound[k]!;
+    for (let e = 0; e < bound.length; e++) bound[e] = this.gain(k, g.pu[e]!, g.pv[e]!);
+    this.known[k]!.fill(this.rivals ? 1 : 2);
+    this.at[k]!.fill(this.marks);
+  }
+
+  /** After scoreAll() of every thread: each pair is left to the thread that gains most from it (the first of
+   * those that gain as much), and is worth to the others what rate() would say. */
+  private claim(): void {
+    const K = this.K, pairs = this.graph!.pu.length;
+    for (let e = 0; e < pairs; e++) {
+      let top = 0, by = -1;
+      for (let k = 0; k < K; k++) if (this.bound[k]![e]! > top) { top = this.bound[k]![e]!; by = k; }
+      if (by < 0) continue;
+      for (let k = 0; k < K; k++) {
+        const own = this.bound[k]![e]!;
+        if (k !== by && own > 0) this.bound[k]![e] = own - top;
+      }
+    }
+    for (let k = 0; k < K; k++) this.known[k]!.fill(2);
+  }
+
+  /** The first line of thread k on a piece with pins inside: the pair worth most to it by what its pairs were
+   * last worth, which among rivals is asked again of each, best first, until one is the thread's. */
+  private begin(k: number): boolean {
+    const g = this.graph!, bound = this.bound[k]!, cand = new Int32Array(bound.length);
+    let count = 0;
+    for (let e = 0; e < bound.length; e++) if (bound[e]! > 0) cand[count++] = e;
+    const ranking = new Ranking(cand, count, bound);
+    for (let e = ranking.next(); e >= 0; e = ranking.next()) {
+      if (!(this.rate(k, e) > 0)) continue;
+      this.seq[k]!.push(g.pu[e]!);
+      this.draw(k, g.pu[e]!, g.pv[e]!);
+      return true;
+    }
+    return false;
+  }
+
   /** Whether the segment between pins a and b may cross the one between pins c and d: each has the other's
    * ends on different sides, or an end on its line. Never false for two segments that do cross. */
   private crosses(a: number, b: number, c: number, d: number): boolean {
@@ -229,7 +397,15 @@ export class GreedyRun {
   /** Adds the line u -> v to thread k and forgets every cached gain it may have changed. */
   private draw(k: number, u: number, v: number): void {
     const P = this.P, N = this.N;
-    this.model.apply(k, rasterLine(this.res, this.alpha, P[2 * u]!, P[2 * u + 1]!, P[2 * v]!, P[2 * v + 1]!));
+    const line = rasterLine(this.res, this.alpha, P[2 * u]!, P[2 * u + 1]!, P[2 * v]!, P[2 * v + 1]!);
+    this.model.apply(k, line);
+    if (this.touched) {
+      const mark = ++this.marks;
+      for (let i = 0; i < line.idx.length; i++) {
+        this.touched[line.idx[i]!] = mark;
+        this.weigh(line.idx[i]!);
+      }
+    }
     this.seq[k]!.push(v);
     this.used[k]![this.key(u, v)]!++;
     this.cur[k] = v;
@@ -271,24 +447,15 @@ export class GreedyRun {
     }
   }
 
-  /** The first line of thread k: the best of all pin pairs, as in generate(). */
+  /** The first line of thread k: the best of all pin pairs, as in generate(). (With pins inside the picture
+   * it is scoreAll() and begin(), which keep what each pair scored for the trips.) */
   private first(k: number): boolean {
-    const N = this.N, ok = this.ok, g = this.graph;
+    const N = this.N, ok = this.ok;
     let best = 0, bu = -1, bv = -1;
-    if (g) {
-      // the same pairs in the same order, and what each scored is kept for the trips
-      const bound = this.bound[k]!;
-      for (let e = 0; e < bound.length; e++) {
-        const gain = this.score(k, g.pu[e]!, g.pv[e]!);
-        bound[e] = gain;
-        if (gain > best) { best = gain; bu = g.pu[e]!; bv = g.pv[e]!; }
-      }
-    } else {
-      for (let u = 0; u < N; u++) for (let v = u + 1; v < N; v++) {
-        if (!ok[u * N + v]) continue;
-        const g = this.score(k, u, v);
-        if (g > best) { best = g; bu = u; bv = v; }
-      }
+    for (let u = 0; u < N; u++) for (let v = u + 1; v < N; v++) {
+      if (!ok[u * N + v]) continue;
+      const g = this.score(k, u, v);
+      if (g > best) { best = g; bu = u; bv = v; }
     }
     if (bu < 0) return false;
     this.seq[k]!.push(bu);
@@ -307,7 +474,8 @@ export class GreedyRun {
    */
   step(): boolean {
     if (this.finished) return false;
-    const { K, N } = this, g = this.graph;
+    if (this.graph) return this.stepInside();
+    const { K, N } = this;
     if (!this.started) {
       this.started = true;
       for (let k = 0; k < K; k++) this.first(k);
@@ -318,21 +486,6 @@ export class GreedyRun {
       const u = this.cur[k]!;
       if (u < 0 || this.seq[k]!.length - 1 >= this.o.maxLines[k]!) continue;
       const gains = this.gains[k]!, valid = this.valid[k]!;
-      if (g) {
-        // the pins this one may be joined to, in order, less the pairs this thread has drawn
-        const to = g.adj[u]!, pair = g.pairOf[u]!, drawn = this.drawn[k]!, bound = this.bound[k]!;
-        for (let i = 0; i < to.length; i++) {
-          const e = pair[i]!;
-          if (drawn[e]) continue;
-          const v = to[i]!;
-          let gain: number;
-          if (valid[v]) gain = gains[v]!;
-          else { gain = this.score(k, u, v); gains[v] = gain; valid[v] = 1; }
-          bound[e] = gain;
-          if (gain > best) { best = gain; bk = k; bv = v; }
-        }
-        continue;
-      }
       for (let v = 0; v < N; v++) {
         if (!this.canUse(k, u, v)) continue;
         let g: number;
@@ -345,13 +498,82 @@ export class GreedyRun {
       this.draw(bk, this.cur[bk]!, bv);
       return true;
     }
-    // nothing helps from where the threads are: with pins inside the picture, a thread makes a trip
-    if (this.trip()) return true;
     // give the threads that never started another chance
     let late = false;
     for (let k = 0; k < K; k++) if (this.cur[k]! < 0 && this.first(k)) late = true;
     if (!late) this.finished = true;
     return late;
+  }
+
+  /** step() of a piece with pins inside the picture. */
+  private stepInside(): boolean {
+    const K = this.K;
+    if (!this.started) {
+      this.started = true;
+      // every thread's pairs on the bare board, then whose each is, then the first lines in the threads' order
+      for (let k = 0; k < K; k++) this.scoreAll(k);
+      if (this.rivals) this.claim();
+      for (let k = 0; k < K; k++) this.begin(k);
+      return true;
+    }
+    if (this.nearest()) return true;
+    // nothing helps from where the threads are: a thread makes a trip
+    if (this.trip()) return true;
+    // give the threads that never started another chance, with their pairs as they are now
+    let late = false;
+    for (let k = 0; k < K; k++) {
+      if (this.cur[k]! >= 0) continue;
+      this.scoreAll(k);
+      if (this.begin(k)) late = true;
+    }
+    if (!late) this.finished = true;
+    return late;
+  }
+
+  /** The best line from where the threads are, drawn; false when none helps. */
+  private nearest(): boolean {
+    const g = this.graph!, K = this.K;
+    for (;;) {
+      let best = 0, bk = -1, bv = -1, be = -1;
+      for (let k = 0; k < K; k++) {
+        const u = this.cur[k]!;
+        if (u < 0 || this.seq[k]!.length - 1 >= this.o.maxLines[k]!) continue;
+        const gains = this.gains[k]!, valid = this.valid[k]!;
+        // the pins this one may be joined to, in order, less the pairs this thread has drawn
+        const to = g.adj[u]!, pair = g.pairOf[u]!, drawn = this.drawn[k]!, bound = this.bound[k]!, known = this.known[k]!, at = this.at[k]!;
+        for (let i = 0; i < to.length; i++) {
+          const e = pair[i]!;
+          if (drawn[e]) continue;
+          const v = to[i]!;
+          let gain: number;
+          if (valid[v]) gain = gains[v]!;
+          else {
+            // what the pair was worth when the thread last looked, if no line has been drawn over it since
+            if (known[e] && !this.changed(u, v, at[e]!)) gain = bound[e]!;
+            else {
+              gain = this.gain(k, u, v);
+              bound[e] = gain;
+              known[e] = this.rivals ? 1 : 2;
+              at[e] = this.marks;
+            }
+            gains[v] = gain;
+            valid[v] = known[e]!;
+          }
+          if (gain > best) { best = gain; bk = k; bv = v; be = e; }
+        }
+      }
+      if (bk < 0) return false;
+      // Among rivals the line is the thread's only if no other gains more from it. That is asked of the best
+      // line alone (valid 2: asked); if it is another's, the next best is looked for.
+      if (this.valid[bk]![bv] !== 2) {
+        const value = this.rate(bk, be);
+        this.gains[bk]![bv] = value;
+        this.valid[bk]![bv] = 2;
+        if (!(value > 0)) continue;
+      }
+      this.draw(bk, this.cur[bk]!, bv);
+      return true;
+    }
   }
 
   /** The trip worth most among the threads', carried out whole; false when no thread has one worth making. */
@@ -374,7 +596,7 @@ export class GreedyRun {
     let found: ReturnType<Planner["plan"]> = null, by = -1;
     for (const k of order) {
       if (found && found.net >= most[k]!) break;
-      const plan = planner.plan(this.cur[k]!, this.drawn[k]!, this.bound[k]!, (u, v) => this.score(k, u, v), this.pace[k]!, room(k));
+      const plan = planner.plan(this.cur[k]!, this.drawn[k]!, this.bound[k]!, (e, floor) => this.rate(k, e, true, floor), this.pace[k]!, room(k));
       if (planner.cramped) this.cramped[k] = 1;
       if (plan && (!found || plan.net > found.net)) { found = plan; by = k; }
     }
@@ -399,6 +621,18 @@ export class GreedyRun {
     return this.model.error();
   }
 
+  /** With pins inside the picture: whether a line anywhere would still be worth drawing to thread k, whose
+   * budget is spent. The pairs that promised something when it last looked, the most promising first, as
+   * they are now; nothing is changed by asking. */
+  private wants(k: number): boolean {
+    const bound = this.bound[k]!, drawn = this.drawn[k]!, cand = new Int32Array(bound.length);
+    let count = 0;
+    for (let e = 0; e < bound.length; e++) if (!drawn[e] && bound[e]! > 0) cand[count++] = e;
+    const ranking = new Ranking(cand, count, bound);
+    for (let e = ranking.next(); e >= 0; e = ranking.next()) if (this.rate(k, e, false) > 0) return true;
+    return false;
+  }
+
   /** What to tell the user when the run has ended (§14). */
   outcome(): Outcome {
     const unstarted: number[] = [], budgetBlocked: number[] = [];
@@ -407,6 +641,10 @@ export class GreedyRun {
       if (u < 0) { unstarted.push(k); continue; }
       if (this.seq[k]!.length - 1 < this.o.maxLines[k]!) {
         if (this.cramped[k]) budgetBlocked.push(k);
+        continue;
+      }
+      if (this.graph) {
+        if (this.wants(k)) budgetBlocked.push(k);
         continue;
       }
       for (let v = 0; v < this.N; v++) {

@@ -181,8 +181,7 @@ const MAX_LEAVE = Math.PI / 6;
  * spacing x sin((skip - 1) x 180 / pins degrees) from the line, on a straight side spacing x sin(the angle
  * to the side), so with the same minimum the thread passes its neighbours at the same distance (D-58).
  *
- * With pins inside the picture the table is (pins + those) square and joinRule() says what it holds (D-60);
- * it is then the caller's to read, not to change: the last one made is kept and handed out again.
+ * With pins inside the picture the table is (pins + those) square and joinRule() says what it holds (D-60).
  */
 export function allowedPairs(o: Joinable): Uint8Array {
   if (insideCount(o)) return withInside(o);
@@ -206,79 +205,28 @@ export function allowedPairs(o: Joinable): Uint8Array {
 // ---------- with pins inside the picture
 
 /** What decides which pins may be joined: the frame and its minimum skip and, with pins inside the picture,
- * where those are and the three lengths the clearance is made of. */
-export type Joinable = AllPins & { minSkip: number; diameterMm?: number; threadWidthMm?: number; pinDiameterMm?: number };
-
-/** Air between a thread and a pin it passes (mm). */
-export const CLEARANCE_AIR_MM = 0.5;
+ * how many of those there are. */
+export type Joinable = AllPins & { minSkip: number };
 
 /**
- * How near the middle of a thread may pass to a pin it does not go to, pin centre to line: the pin's radius,
- * the thread's, and half a millimetre of air. 1.375 mm at the defaults, which is the round frame's own rule:
- * with 256 pins on 500 mm, a chord 19 pins long passes 1.344 mm from the pin next to its end and one 20 long
- * 1.418 mm, and the minimum skip there is 20.
+ * Says which two pins a thread may join on a piece with pins inside the picture (D-60, D-61):
+ *  - two pins of the frame: what the frame alone allows, so the frame keeps every line it had;
+ *  - any pair with a pin inside: always.
+ * A line may pass other pins on its way, however near. A thread that meets a nail lies against it and goes on,
+ * less than a millimetre off the straight line (the nail's radius and its own): the picture cannot tell. The
+ * first version of D-60 forbade it and lost three in four of the frame's long lines, which are what lays
+ * down tone, and every stroke longer than the way to the next pin.
  */
-export const clearanceMm = (o: { threadWidthMm?: number; pinDiameterMm?: number }): number => (o.pinDiameterMm ?? 1.5) / 2 + (o.threadWidthMm ?? 0.25) / 2 + CLEARANCE_AIR_MM;
-
-/**
- * Says which two pins a thread may join on a piece with pins inside the picture (D-60):
- *  - two pins of the frame: what the frame alone allows, unless the line passes a pin inside within the clearance;
- *  - any pair with a pin inside: unless the line passes a third pin, on the frame or inside, within the clearance.
- * `slack` below 1 lets a line pass that much nearer: a stored piece is checked with a little of it, so that a
- * last digit that differs between two browsers cannot turn a piece one of them made into one the other rejects.
- *
- * The test is exact (each pin near the line is tried, found through a grid of buckets) and uses nothing but
- * sums, products, one quotient and a comparison of squares.
- */
-export function joinRule(o: Joinable, slack = 1): (u: number, v: number) => boolean {
-  const F = o.pins, M = insideCount(o), N = F + M;
-  const frame = allowedPairs({ pins: F, minSkip: o.minSkip, shape: o.shape, aspect: o.aspect });
-  if (!M) return (u, v) => frame[u * F + v] === 1;
-  const U = unitAll(o), clear = (slack * clearanceMm(o)) / (o.diameterMm ?? 500), clear2 = clear * clear;
-  // A pin within the clearance of a line is within three quarters of a cell of one of the points the line is
-  // walked by (half a cell apart; the clearance is at most half a cell), so it is in that point's bucket or one beside it.
-  const cell = Math.max(0.02, 2 * clear), G = Math.ceil(1 / cell) + 3;
-  const first = new Int32Array(G * G).fill(-1), next = new Int32Array(N);
-  for (let i = 0; i < N; i++) {
-    const b = (Math.floor(U[2 * i + 1]! / cell) + 1) * G + Math.floor(U[2 * i]! / cell) + 1;
-    next[i] = first[b]!;
-    first[b] = i;
-  }
-  /** Whether a pin numbered `from` or higher, other than the line's own two, is within the clearance of the line. */
-  const blocked = (u: number, v: number, from: number): boolean => {
-    const ax = U[2 * u]!, ay = U[2 * u + 1]!, dx = U[2 * v]! - ax, dy = U[2 * v + 1]! - ay, len2 = dx * dx + dy * dy;
-    if (!(len2 > 0)) return true; // two pins on one spot: no line
-    const steps = Math.max(1, Math.ceil(Math.sqrt(len2) / (cell / 2)));
-    let last = -1;
-    for (let s = 0; s <= steps; s++) {
-      const cx = Math.floor((ax + (dx * s) / steps) / cell) + 1, cy = Math.floor((ay + (dy * s) / steps) / cell) + 1;
-      if (cy * G + cx === last) continue;
-      last = cy * G + cx;
-      for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) {
-        for (let w = first[(cy + j) * G + cx + i]!; w >= 0; w = next[w]!) {
-          if (w < from || w === u || w === v) continue;
-          const px = U[2 * w]! - ax, py = U[2 * w + 1]! - ay, along = (px * dx + py * dy) / len2, t = along < 0 ? 0 : along > 1 ? 1 : along;
-          const ex = px - t * dx, ey = py - t * dy;
-          if (ex * ex + ey * ey < clear2) return true;
-        }
-      }
-    }
-    return false;
-  };
-  return (u, v) => u !== v && (u < F && v < F ? frame[u * F + v] === 1 && !blocked(u, v, F) : !blocked(u, v, 0));
+export function joinRule(o: Joinable): (u: number, v: number) => boolean {
+  const F = o.pins, frame = allowedPairs({ pins: F, minSkip: o.minSkip, shape: o.shape, aspect: o.aspect });
+  return (u, v) => (u < F && v < F ? frame[u * F + v] === 1 : u !== v);
 }
 
-/** The table of the last piece with pins inside, kept because working it out takes a few tenths of a second
- * and a search runs the same piece many times over (the automatic adjustment: forty times). */
-let lastTable: { key: string; inside: Float64Array; table: Uint8Array } | null = null;
-
 function withInside(o: Joinable): Uint8Array {
-  const inside = o.inside!, key = [o.pins, o.shape ?? "circle", o.aspect ?? 1, o.minSkip, o.diameterMm ?? 500, o.threadWidthMm ?? 0.25, o.pinDiameterMm ?? 1.5].join("|");
-  const kept = lastTable;
-  if (kept && kept.key === key && kept.inside.length === inside.length && kept.inside.every((v, i) => v === inside[i])) return kept.table;
-  const N = pinCount(o), ok = new Uint8Array(N * N), may = joinRule(o);
-  for (let u = 0; u < N; u++) for (let v = u + 1; v < N; v++) if (may(u, v)) ok[u * N + v] = ok[v * N + u] = 1;
-  lastTable = { key, inside: Float64Array.from(inside), table: ok };
+  const F = o.pins, N = pinCount(o), ok = new Uint8Array(N * N).fill(1);
+  const frame = allowedPairs({ pins: F, minSkip: o.minSkip, shape: o.shape, aspect: o.aspect });
+  for (let u = 0; u < F; u++) ok.set(frame.subarray(u * F, u * F + F), u * N);
+  for (let u = F; u < N; u++) ok[u * N + u] = 0;
   return ok;
 }
 
@@ -313,12 +261,6 @@ export function insideMm(frame: FrameSpec & { diameterMm: number }, inside: Arra
   const { w, h } = isRect(frame) ? unitSides(frame.aspect ?? 1) : { w: 1, h: 1 };
   return { left: (inside[2 * j]! - (1 - w) / 2) * frame.diameterMm, top: (inside[2 * j + 1]! - (1 - h) / 2) * frame.diameterMm };
 }
-
-/** Whether the frame's pins stand so close that hardly a line can leave the frame for a pin inside: a line
- * passes the pin next to its end at the pin spacing x the sine of its angle to the frame, so below twice the
- * clearance only lines steeper than 30 degrees are left, and below the clearance itself none. */
-export const tooDenseForInside = (frame: Layout & { diameterMm: number; pinDiameterMm?: number }, threadWidthMm: number): boolean =>
-  pinSpacingMm(frame).along < 2 * clearanceMm({ threadWidthMm, pinDiameterMm: frame.pinDiameterMm });
 
 // ---------- in millimetres
 

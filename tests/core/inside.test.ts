@@ -1,9 +1,9 @@
-// Pins inside the picture (DECISIONS D-60): where they are put, how they are held beside the frame's pins,
-// which two pins a thread may then join, and the way round the frame.
+// Pins inside the picture (DECISIONS D-60, D-61): where they are put, how they are held beside the frame's
+// pins, which two pins a thread may then join, and the way round the frame.
 import { describe, expect, it } from "vitest";
 import {
-  allowedPairs, aroundFrame, clearanceMm, frameBounds, frameMask, framePins, frameThreadMm, insideCount, insideMm, isRound, joinRule, pinCount, pinOf, roundTo,
-  tooDenseForInside, unitAll, type FrameOptions, type Joinable,
+  allowedPairs, aroundFrame, frameBounds, frameMask, framePins, frameThreadMm, insideCount, insideMm, isRound, joinRule, pinCount, pinOf, roundTo, unitAll,
+  type FrameOptions, type Joinable,
 } from "../../src/core/frame.ts";
 import { BAND_MM, INSIDE_MAX, insideGapMm, placeInside, placeRes, type PlaceInput } from "../../src/core/inside.ts";
 import { oklab } from "../../src/core/stringart.ts";
@@ -129,94 +129,50 @@ describe("the frame's pins with pins inside the picture after them", () => {
   });
 });
 
-/** Which pins may be joined, by trying every third pin against every pair. */
-function tryEveryPin(o: Joinable): Uint8Array {
-  const F = o.pins, N = pinCount(o), U = unitAll(o), frame = allowedPairs({ pins: F, minSkip: o.minSkip, shape: o.shape, aspect: o.aspect }), clear = clearanceMm(o) / o.diameterMm!;
-  const far = (w: number, u: number, v: number): boolean => {
-    const ax = U[2 * u]!, ay = U[2 * u + 1]!, dx = U[2 * v]! - ax, dy = U[2 * v + 1]! - ay, t = Math.max(0, Math.min(1, ((U[2 * w]! - ax) * dx + (U[2 * w + 1]! - ay) * dy) / (dx * dx + dy * dy)));
-    return Math.hypot(U[2 * w]! - ax - t * dx, U[2 * w + 1]! - ay - t * dy) >= clear;
-  };
-  const ok = new Uint8Array(N * N);
-  for (let u = 0; u < N; u++) for (let v = u + 1; v < N; v++) {
-    const both = u < F && v < F;
-    let fine = both ? frame[u * F + v] === 1 : true;
-    for (let w = both ? F : 0; fine && w < N; w++) if (w !== u && w !== v && !far(w, u, v)) fine = false;
-    if (fine) ok[u * N + v] = ok[v * N + u] = 1;
-  }
-  return ok;
-}
-
 describe("which two pins a thread may join when there are pins inside", () => {
   const scattered = (count: number, seed: number): number[] => { const r = mulberry32(seed); return Array.from({ length: 2 * count }, () => Number((0.2 + 0.6 * r()).toFixed(6))); };
   const cases: Joinable[] = [
-    { pins: 48, minSkip: 5, diameterMm: 300, threadWidthMm: 0.5, pinDiameterMm: 2, inside: scattered(30, 1) },
-    { pins: 64, minSkip: 6, diameterMm: 250, threadWidthMm: 0.25, pinDiameterMm: 1.5, shape: "rect", aspect: 0.75, inside: scattered(30, 2).map((v, i) => (i % 2 ? v : 0.25 + 0.5 * v)) },
-    { pins: 56, minSkip: 4, diameterMm: 400, threadWidthMm: 0.6, pinDiameterMm: 3, shape: "rect", aspect: 2, inside: scattered(24, 3).map((v, i) => (i % 2 ? 0.3 + 0.4 * v : v)) },
+    { pins: 48, minSkip: 5, inside: scattered(30, 1) },
+    { pins: 64, minSkip: 6, shape: "rect", aspect: 0.75, inside: scattered(30, 2).map((v, i) => (i % 2 ? v : 0.25 + 0.5 * v)) },
+    { pins: 56, minSkip: 4, shape: "rect", aspect: 2, inside: scattered(24, 3).map((v, i) => (i % 2 ? 0.3 + 0.4 * v : v)) },
   ];
 
-  it("is the pin's radius, the thread's and half a millimetre from any pin it passes: the round frame's own rule", () => {
-    expect([clearanceMm({}), clearanceMm({ threadWidthMm: 0.5, pinDiameterMm: 2 })]).toEqual([1.375, 1.75]);
-    // 256 pins on 500 mm: a chord 19 pins long passes the pin next to its end nearer than that, one 20 long does not
-    const U = unitAll({ pins: 256 }), next = (v: number): number => {
-      const dx = U[2 * v]! - U[0]!, dy = U[2 * v + 1]! - U[1]!, t = ((U[2]! - U[0]!) * dx + (U[3]! - U[1]!) * dy) / (dx * dx + dy * dy);
-      return 500 * Math.hypot(U[2]! - U[0]! - t * dx, U[3]! - U[1]! - t * dy);
-    };
-    expect(next(19)).toBeCloseTo(1.344, 3);
-    expect(next(20)).toBeCloseTo(1.418, 3);
-    expect(next(19)).toBeLessThan(clearanceMm({}));
-    expect(next(20)).toBeGreaterThan(clearanceMm({}));
-  });
-
-  it("is what trying every pin against every pair gives, on a round and on two rectangular frames", () => {
+  it("two pins of the frame as on the frame alone, and any pin with a pin inside", () => {
     for (const o of cases) {
-      const N = pinCount(o), F = o.pins, ok = allowedPairs(o), want = tryEveryPin(o), frame = allowedPairs({ pins: F, minSkip: o.minSkip, shape: o.shape, aspect: o.aspect });
+      const N = pinCount(o), F = o.pins, ok = allowedPairs(o), frame = allowedPairs({ pins: F, minSkip: o.minSkip, shape: o.shape, aspect: o.aspect });
       expect(ok).toHaveLength(N * N);
-      let wrong = 0, lop = 0, lost = 0, among = 0;
+      let kept = 0;
       for (let u = 0; u < N; u++) for (let v = 0; v < N; v++) {
-        if (ok[u * N + v] !== want[u * N + v]) wrong++;
-        if (ok[u * N + v] !== ok[v * N + u]) lop++;
-        if (u < F && v < F && frame[u * F + v] && !ok[u * N + v]) lost++;
-        if (u >= F && v > u && ok[u * N + v]) among++;
-        // two pins of the frame are never joined where the frame alone would not join them
-        if (u < F && v < F && ok[u * N + v]) expect(frame[u * F + v]).toBe(1);
+        // the frame keeps every line it had and gets no other; a line with an end inside is always one
+        const want = u < F && v < F ? frame[u * F + v]! : u === v ? 0 : 1;
+        expect(ok[u * N + v], `${u}-${v}`).toBe(want);
+        if (u < F && v < F && want) kept++;
       }
-      expect([wrong, lop]).toEqual([0, 0]);
-      for (let u = 0; u < N; u++) expect(ok[u * N + u]).toBe(0);
-      expect(lost).toBeGreaterThan(0); // some of the frame's own lines now pass a pin inside
-      expect(among).toBeGreaterThan(0);
-      expect(among).toBeLessThan((N - F) * (N - F - 1) / 2); // and some pairs inside have a pin between them
+      expect(kept).toBeGreaterThan(F); // and that is not an empty promise
     }
   });
 
-  it("is kept for the next piece with the same pins, and made again for another", () => {
-    const o = cases[0]!, table = allowedPairs(o);
-    expect(allowedPairs({ ...o, inside: Array.from(o.inside!) })).toBe(table);
-    const other = allowedPairs({ ...o, minSkip: 6 });
-    expect(other).not.toBe(table);
-    expect(allowedPairs({ ...o, inside: Array.from(o.inside!).map((v, i) => (i ? v : v + 0.01)) })).not.toBe(other);
-    // without pins inside nothing is kept: a table of the frame's own, to change as one likes
-    expect(allowedPairs({ pins: 48, minSkip: 5 })).not.toBe(allowedPairs({ pins: 48, minSkip: 5 }));
-    expect(allowedPairs({ pins: 48, minSkip: 5, inside: [] })).toHaveLength(48 * 48);
+  it("whatever pin the line passes on its way: a thread lies against a nail and goes on", () => {
+    // Three pins inside in a row, the middle one on the line between the other two; and two pins of the frame,
+    // opposite each other, whose line runs through all three.
+    const o: Joinable = { pins: 8, minSkip: 1, inside: [0.3, 0.5, 0.7, 0.5, 0.5, 0.5] }, may = joinRule(o), U = unitAll(o);
+    for (const pin of [2, 6]) expect(U[2 * pin + 1]).toBeCloseTo(0.5, 12); // pins 3 and 7 of the frame: at three and at nine o'clock
+    expect(may(8, 9)).toBe(true);
+    expect(may(2, 6)).toBe(true);
+    expect(may(2, 8)).toBe(true);
+    expect([may(8, 8), may(2, 2)]).toEqual([false, false]);
+    const table = allowedPairs(o);
+    for (let u = 0; u < 11; u++) for (let v = 0; v < 11; v++) expect(may(u, v), `${u}-${v}`).toBe(table[u * 11 + v] === 1);
   });
 
-  it("can be asked pair by pair, with a little slack for a piece made elsewhere", () => {
-    // two pins inside with a third just nearer their line than the clearance
-    const clear = clearanceMm({}) / 500, o: Joinable = { pins: 8, minSkip: 1, diameterMm: 500, inside: [0.3, 0.5, 0.7, 0.5, 0.5, 0.5 + 0.9995 * clear] };
-    expect(joinRule(o)(8, 9)).toBe(false);
-    expect(joinRule(o, 0.999)(8, 9)).toBe(true);
-    expect(joinRule(o)(8, 10)).toBe(true);
-    expect(joinRule(o)(8, 8)).toBe(false);
-    const table = allowedPairs(o), may = joinRule(o);
-    for (let u = 0; u < 11; u++) for (let v = 0; v < 11; v++) expect(may(u, v), `${u}-${v}`).toBe(table[u * 11 + v] === 1);
-    // with no pins inside the rule is the frame's
+  it("with no pins inside is the frame's own rule, in a table of the frame's own", () => {
     const plain = joinRule({ pins: 64, minSkip: 6 });
     expect([plain(0, 5), plain(0, 6), plain(0, 60)]).toEqual([false, true, false]);
-  });
-
-  it("says when the frame's pins stand too close for a line to leave the frame", () => {
-    expect(tooDenseForInside({ pins: 256, diameterMm: 500 }, 0.25)).toBe(false);
-    expect(tooDenseForInside({ pins: 512, diameterMm: 200 }, 0.25)).toBe(true);
-    expect(tooDenseForInside({ pins: 256, diameterMm: 500, pinDiameterMm: 5 }, 0.25)).toBe(true); // 6.1 mm apart, 3.1 mm to clear
+    expect(allowedPairs({ pins: 48, minSkip: 5, inside: [] })).toEqual(allowedPairs({ pins: 48, minSkip: 5 }));
+    // a table is the caller's to change: none is handed out twice
+    expect(allowedPairs({ pins: 48, minSkip: 5 })).not.toBe(allowedPairs({ pins: 48, minSkip: 5 }));
+    expect(allowedPairs(cases[0]!)).not.toBe(allowedPairs(cases[0]!));
+    expect(allowedPairs(cases[0]!)).toEqual(allowedPairs(cases[0]!));
   });
 });
 

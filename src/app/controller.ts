@@ -9,7 +9,7 @@ import {
   applyPreset, defaultOrder, freeCandidates, ORDER_SEARCH_MAX, ORDER_SEARCH_VERIFY, paletteWarnings, permutations, pickPalette, placeByLightness, presetById, proxyOptions, reorder, toHex,
 } from "../core/palette.ts";
 import {
-  frameSpec, generationKey, LIMITS, madeOptions, modeDefaults, normalizeProject, placementKey, serializeProject, targetKey, toOptions,
+  frameSpec, generationKey, LIMITS, madeOptions, modeDefaults, normalizeProject, placementKey, serializeProject, targetKey, toOptions, withInside,
   type Crop, type Mode, type Project, type Result, type Stroke, type ThreadSpec,
 } from "../core/project.ts";
 import { frameBounds, frameMask } from "../core/frame.ts";
@@ -76,6 +76,11 @@ export class Controller {
     };
     next = walk(next, 0);
     this.commit(next as Project);
+  }
+
+  /** How many pins to put inside the picture; the threads' budgets go with it where they are the usual ones (D-61). */
+  setInside(count: number): void {
+    this.commit(withInside(this.state.project, count));
   }
 
   setCrop(patch: Partial<Crop>): void {

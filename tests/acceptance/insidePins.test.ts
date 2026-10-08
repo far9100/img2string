@@ -1,4 +1,4 @@
-// A piece with pins inside the picture (DECISIONS D-60) through everything that is stored or handed out: the
+// A piece with pins inside the picture (DECISIONS D-60, D-61) through everything that is stored or handed out: the
 // project file and its keys, the instructions, the player, the nail template and the other files. The piece is
 // a real one (tests/helpers/pdf.ts's insideProject), so its sequence has steps round the frame and steps along
 // lines drawn before; no reader of it may take a step round the frame for a pin, or a pin inside for one of
@@ -10,7 +10,10 @@ import { replayModel, runGreedy } from "../../src/core/greedy.ts";
 import {
   boardSizeMm, instructionsCsv, instructionsTxt, materials, pinCode, pinHint, ROUND_MARK, sheetTexts, templateTitle, THREAD_MARGIN, threadPlans, whereIs,
 } from "../../src/core/instructions.ts";
-import { defaultProject, generationKey, LIMITS, madeOptions, normalizeProject, placementKey, serializeProject, targetKey, toOptions, type Project } from "../../src/core/project.ts";
+import { applyPreset, presetById } from "../../src/core/palette.ts";
+import {
+  defaultBudget, defaultProject, generationKey, INSIDE_BUDGET, LIMITS, madeOptions, normalizeProject, placementKey, serializeProject, targetKey, toOptions, withInside, type Project,
+} from "../../src/core/project.ts";
 import { measureTrueWidth } from "../../src/core/realistic.ts";
 import { buildFile, needsPiece, needsResult, type ExportKind } from "../../src/export/build.ts";
 import { templateDxf } from "../../src/export/dxf.ts";
@@ -46,6 +49,43 @@ describe("the piece these tests are about", () => {
     }
     expect(again).toBeGreaterThan(0);
     expect(sequence.some((entry) => pinOf(entry) >= F)).toBe(true);
+  });
+});
+
+describe("the budget a thread starts with on a piece with pins inside (D-61)", () => {
+  const colours = (q: Project) => applyPreset(q, presetById("colour-cmyk")!, (key) => key);
+
+  it("is the mode's own on a frame alone, and 4000 in either mode with pins inside", () => {
+    expect([defaultBudget("mono", false), defaultBudget("colour", false), defaultBudget("mono", true), defaultBudget("colour", true)]).toEqual([4000, 1500, 4000, INSIDE_BUDGET]);
+    expect(INSIDE_BUDGET).toBe(4000);
+  });
+
+  it("goes with the pins when they are turned on and off, where the user has not set it", () => {
+    const colour = colours(defaultProject());
+    expect(colour.threads.map((t) => t.maxLines)).toEqual([1500, 1500, 1500, 1500]);
+    const pinned = withInside(colour, 300);
+    expect(pinned.frame.inside).toBe(300);
+    expect(pinned.threads.map((t) => t.maxLines)).toEqual([4000, 4000, 4000, 4000]);
+    // another number of pins changes nothing; none at all takes the budgets back
+    expect(withInside(pinned, 150).threads).toBe(pinned.threads);
+    expect(withInside(pinned, 0).threads.map((t) => t.maxLines)).toEqual([1500, 1500, 1500, 1500]);
+    expect(normalizeProject(withInside(pinned, 0)).project.frame).toEqual(colour.frame);
+    // a budget that was set by hand stays, both ways
+    const own = { ...colour, threads: colour.threads.map((t, i) => (i === 3 ? { ...t, maxLines: 2500 } : t)) };
+    expect(withInside(own, 300).threads.map((t) => t.maxLines)).toEqual([4000, 4000, 4000, 2500]);
+    expect(withInside({ ...pinned, threads: pinned.threads.map((t, i) => (i === 0 ? { ...t, maxLines: 900 } : t)) }, 0).threads.map((t) => t.maxLines)).toEqual([900, 1500, 1500, 1500]);
+    // with one black thread the two are the same number: nothing to change
+    const mono = defaultProject();
+    expect(withInside(mono, 300).threads).toBe(mono.threads);
+  });
+
+  it("is what a project takes when its mode changes while it has pins inside", () => {
+    const pinned = withInside(defaultProject(), 300), colour = colours(pinned);
+    expect(colour.frame.inside).toBe(300);
+    expect(colour.threads.map((t) => t.maxLines)).toEqual([4000, 4000, 4000, 4000]);
+    // within a mode a new palette keeps the budget the first thread has
+    const other = applyPreset({ ...colour, threads: colour.threads.map((t) => ({ ...t, maxLines: 2200 })) }, presetById("colour-rgbw")!, (key) => key);
+    expect(other.threads.map((t) => t.maxLines)).toEqual([2200, 2200, 2200, 2200]);
   });
 });
 
@@ -144,12 +184,13 @@ describe("a project with pins inside the picture", () => {
     bad("round the frame to where it is", { sequences: [[3, roundTo(3)]] });
     bad("a pin the piece has not", { sequences: [[3, F + M]] });
     bad("half a pin", { sequences: [[3, 40.5]] });
-    // a line that passes a third pin nearer than a thread may: some two pins inside have another between them
-    const may = joinRule({ pins: F, minSkip: p.generator.minSkip, inside, diameterMm: 300, threadWidthMm: 0.5, pinDiameterMm: 1.5 });
-    let blocked: number[] | null = null;
-    for (let u = F; u < F + M && !blocked; u++) for (let v = u + 1; v < F + M; v++) if (!may(u, v)) { blocked = [u, v]; break; }
-    expect(blocked).not.toBeNull();
-    bad("a line through a pin", { sequences: [blocked!] });
+    // Two pins of the frame only as the frame alone would join them; any pin with a pin inside, whatever
+    // stands between them (D-61: a thread lies against a nail in its way and goes on).
+    const may = joinRule({ pins: F, minSkip: p.generator.minSkip, inside });
+    expect([may(0, 3), may(0, 30), may(0, F), may(F, F + M - 1), may(F, F)]).toEqual([false, true, true, true, false]);
+    bad("two pins of the frame nearer than its minimum skip", { sequences: [[0, 3]] });
+    bad("a pin joined to itself", { sequences: [[F, F]] });
+    for (const line of [[0, F], [F, F + M - 1], [F + 1, 40]]) expect(read({ sequences: [line] }).project.result?.sequences, line.join("-")).toEqual([line]);
     // round the frame between any two of its pins, however near, is fine: nothing crosses the picture
     expect(read({ sequences: [[3, roundTo(4)]] }).project.result?.sequences).toEqual([[3, roundTo(4)]]);
     // a piece of such a frame that got no pin is a piece of the frame alone: its lines by the minimum skip, and no walks

@@ -1,4 +1,4 @@
-// Pins inside the picture, in the built page (DECISIONS D-60): a line drawing is offered them in one press;
+// Pins inside the picture, in the built page (DECISIONS D-60, D-61): a line drawing is offered them in one press;
 // they are placed with the target and drawn on it; the piece, the nail template, the instructions and the
 // player go by the piece's own pins; nothing that leaves the pins where they are moves them; and a project
 // saved with such a piece opens to the same piece without its picture.
@@ -71,11 +71,11 @@ test("pins inside the picture: offered for a line drawing, placed with the targe
   await expect(page.getByText("畫面裡有釘子時，模板是做好的那一件作品的")).toBeVisible();
 
   await generate(page);
-  const made = await state(page, (s) => ({ frame: s.made!.frame, inside: s.made!.result!.inside ?? [], sequence: s.made!.result!.sequences[0]!, minSkip: s.made!.generator.minSkip, width: s.made!.thread.widthMm }));
+  const made = await state(page, (s) => ({ frame: s.made!.frame, inside: s.made!.result!.inside ?? [], sequence: s.made!.result!.sequences[0]!, minSkip: s.made!.generator.minSkip }));
   expect(made.frame).toEqual({ shape: "circle", diameterMm: 500, pins: 96, pinDiameterMm: 1.5, inside: 40 });
   expect(made.inside).toEqual(placed);
   // every step is a line the pins allow, or a way round the frame between two of its pins
-  const N = 96 + 40, ok = allowedPairs({ pins: 96, minSkip: made.minSkip, diameterMm: 500, threadWidthMm: made.width, pinDiameterMm: 1.5, inside: made.inside });
+  const N = 96 + 40, ok = allowedPairs({ pins: 96, minSkip: made.minSkip, inside: made.inside });
   expect(made.sequence.length).toBeGreaterThan(40);
   for (let i = 1; i < made.sequence.length; i++) {
     const u = pinOf(made.sequence[i - 1]!), v = pinOf(made.sequence[i]!);
@@ -156,4 +156,47 @@ test("pins inside the picture: offered for a line drawing, placed with the targe
   const reopened = (await get("模板 SVG")).toString();
   expect(/<g id="pins">([\s\S]*?)<\/g>/.exec(reopened)![1]!.match(/<circle/g)).toHaveLength(136);
   await expect(page.locator(".materials")).toContainText("框上 96 根、畫面內 40 根");
+});
+
+test("several colours with pins inside: the budgets go with the pins, and a picture in greys is wound in black", async ({ page }) => {
+  test.setTimeout(240_000);
+  await open(page);
+  // the face sample is all greys; yellow, cyan, magenta and black on a white board, at settings small enough for a test
+  await page.getByRole("button", { name: "臉", exact: true }).click();
+  await idle(page);
+  await page.evaluate(() => {
+    const { ctl } = (window as unknown as { __i2s: TestHooks }).__i2s;
+    ctl.applyPreset("colour-cmyk");
+    ctl.commit({ ...ctl.state.project, frame: { ...ctl.state.project.frame, pins: 96 }, generator: { ...ctl.state.project.generator, res: 120, minSkip: 8 } });
+  });
+  await idle(page);
+  const budgets = () => state(page, (s) => s.project.threads.map((t) => t.maxLines));
+  expect(await budgets()).toEqual([1500, 1500, 1500, 1500]);
+
+  // a piece with pins inside takes about twice the steps: the budgets a project starts with go up with them
+  const field = page.getByLabel("畫面內的釘子");
+  await field.fill("60");
+  await field.press("Enter");
+  await expect.poll(() => state(page, (s) => s.project.frame.inside ?? 0)).toBe(60);
+  await idle(page);
+  expect(await budgets()).toEqual([4000, 4000, 4000, 4000]);
+  await field.fill("0");
+  await field.press("Enter");
+  await expect.poll(() => state(page, (s) => s.project.frame.inside ?? 0)).toBe(0);
+  expect(await budgets()).toEqual([1500, 1500, 1500, 1500]);
+  // one the user has set stays
+  await page.evaluate(() => (window as unknown as { __i2s: TestHooks }).__i2s.ctl.setThread(3, { maxLines: 700 }));
+  await field.fill("60");
+  await field.press("Enter");
+  await expect.poll(() => state(page, (s) => s.project.frame.inside ?? 0)).toBe(60);
+  await idle(page);
+  expect(await budgets()).toEqual([4000, 4000, 4000, 700]);
+
+  // The black thread runs out long before the face is done. No other colour draws what is left to it: the
+  // piece is black on white, and the page says whose budget ran out.
+  await generate(page);
+  const lines = await state(page, (s) => s.made!.result!.lines);
+  expect(lines[3]).toBe(700);
+  expect(lines[0]! + lines[1]! + lines[2]!).toBeLessThan(140);
+  await expect(page.getByText("線數上限用完了，但還有線能改善結果（黑）")).toBeVisible();
 });

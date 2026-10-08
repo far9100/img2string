@@ -1,17 +1,18 @@
 // One thread over pins inside the picture, written straight down (DECISIONS D-60): every candidate from the
-// thread's pin scored afresh at every step with Model.gain(), and a trip when none helps. It shares nothing
+// thread's pin scored afresh at every step (lineGain.ts: Model.gain() in the generator's arithmetic), and a trip when none helps. It shares nothing
 // with greedy.ts and travel.ts but frame.ts's pins and pairs, so the tests can hold the generator to it line
 // for line, the way they hold it to stringart.ts's generate() on a frame alone. After the experiment's run2()
 // ("travel"), with the app's rules where they differ: a step round the frame counts against the budget, a
 // trip that does not fit the budget is passed over, and the cost of a step goes with the thread's contrast.
 import { allowedPairs, aroundFrame, framePins, pinCount, roundTo, type FrameOptions } from "../../src/core/frame.ts";
 import { coverageAlpha, Model, rasterLine } from "../../src/core/stringart.ts";
+import { lineGain } from "./lineGain.ts";
 
-const TRIES = 200, ROUNDS = 64;
+const LOOKS = 12800;
 
 export function travelReference(o: FrameOptions, target: Float64Array, weight: Float64Array): { sequence: number[]; error: number } {
   const P = framePins(o), N = pinCount(o), F = o.pins, ok = allowedPairs(o), alpha = coverageAlpha(o), model = new Model(o, target, weight), budget = o.maxLines[0]!;
-  const score = (u: number, v: number): number => model.gain(0, rasterLine(o.res, alpha, P[2 * u]!, P[2 * u + 1]!, P[2 * v]!, P[2 * v + 1]!));
+  const score = (u: number, v: number): number => lineGain(model, 0, rasterLine(o.res, alpha, P[2 * u]!, P[2 * u + 1]!, P[2 * v]!, P[2 * v + 1]!));
   const c = o.threads[0]!, contrast = ((c[0] - o.board[0]) ** 2 + (c[1] - o.board[1]) ** 2 + (c[2] - o.board[2]) ** 2) / 3, step = 0.25 * alpha * alpha * Math.max(0.05, contrast);
 
   // every allowed pair once (u ascending, then v), and for every pin its partners with the pair's number
@@ -110,42 +111,43 @@ export function travelReference(o: FrameOptions, target: Float64Array, weight: F
       }
     }
 
-    // of all pairs, the one whose gain exceeds the harm of the way to it by most
-    const seen = new Array<boolean>(pairs).fill(false);
+    // Of all pairs, the one whose gain exceeds the harm of the way to it by most: those that promise something
+    // by what they last scored, the most promising first, each scored as things are now, and so are the new
+    // lines of its way.
+    const cand: { t: number; hope: number }[] = [];
+    for (let t = 0; t < pairs; t++) {
+      if (used[t] || !(bound[t]! > 0)) continue;
+      const hope = bound[t]! - Math.min(dist[pu[t]!]!, dist[pv[t]!]!);
+      if (hope > 0) cand.push({ t, hope });
+    }
+    cand.sort((x, y) => y.hope - x.hope || x.t - y.t);
     let net = 0, pick = -1, pickWay: number[] = [];
-    for (let round = 0; round < ROUNDS; round++) {
-      const cand: { t: number; hope: number }[] = [];
-      for (let t = 0; t < pairs; t++) {
-        if (used[t] || seen[t] || !(bound[t]! > 0)) continue;
-        const hope = bound[t]! - Math.min(dist[pu[t]!]!, dist[pv[t]!]!);
-        if (hope > net) cand.push({ t, hope });
-      }
-      cand.sort((x, y) => y.hope - x.hope || x.t - y.t);
-      let looked = 0;
-      for (; looked < cand.length && looked < TRIES; looked++) {
-        const { t, hope } = cand[looked]!;
-        if (hope <= net) { looked = cand.length; break; }
-        seen[t] = true;
-        const gain = score(pu[t]!, pv[t]!);
-        bound[t] = gain;
-        if (!(gain > net)) continue;
-        const a = pu[t]!, b = pv[t]!;
-        const both = dist[b] === dist[a] && walked[a]! && walked[b]! && from[a] === cur && from[b] === cur;
-        const end = dist[b]! < dist[a]! || (both && aroundFrame(o, cur, b).length < aroundFrame(o, cur, a).length) ? b : a;
-        const way: number[] = [];
-        for (let x = end; x !== cur; x = from[x]!) way.push(x);
-        way.reverse();
-        let value = gain;
-        for (let k = 0, at = cur; k < way.length; at = way[k++]!) {
-          if (walked[way[k]!]) continue;
-          value += (used[pairOf(at, way[k]!)] ? 0 : score(at, way[k]!)) - step;
+    for (let looked = 0; looked < cand.length && looked < LOOKS; looked++) {
+      const { t, hope } = cand[looked]!;
+      if (hope <= net) break;
+      const gain = score(pu[t]!, pv[t]!);
+      bound[t] = gain;
+      if (!(gain > net)) continue;
+      const a = pu[t]!, b = pv[t]!;
+      const both = dist[b] === dist[a] && walked[a]! && walked[b]! && from[a] === cur && from[b] === cur;
+      const end = dist[b]! < dist[a]! || (both && aroundFrame(o, cur, b).length < aroundFrame(o, cur, a).length) ? b : a;
+      const way: number[] = [];
+      for (let x = end; x !== cur; x = from[x]!) way.push(x);
+      way.reverse();
+      let value = gain;
+      for (let k = 0, at = cur; k < way.length; at = way[k++]!) {
+        if (walked[way[k]!]) continue;
+        const pair = pairOf(at, way[k]!);
+        if (used[pair]) value -= step;
+        else {
+          bound[pair] = score(at, way[k]!);
+          value += bound[pair]! - step;
         }
-        if (!(value > net) || way.length + 1 > room) continue;
-        net = value;
-        pick = t;
-        pickWay = way;
       }
-      if (looked >= cand.length) break;
+      if (!(value > net) || way.length + 1 > room) continue;
+      net = value;
+      pick = t;
+      pickWay = way;
     }
     if (pick < 0) break;
     const round = pickWay.map((pin) => walked[pin]!);

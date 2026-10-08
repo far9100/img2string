@@ -96,9 +96,6 @@ export const LIMITS = {
   inside: [0, INSIDE_MAX],
 } as const;
 
-/** A stored piece's lines may pass a pin this share of the clearance: see frame.ts's joinRule. */
-const STORED_SLACK = 0.999;
-
 /** With generator.allowRepeat, how often one thread may use the same pin pair (§3 "Repeats", §13.5). */
 export const MAX_REPEAT = 3;
 
@@ -108,6 +105,26 @@ export const IDENTITY_CROP: Crop = { cx: 0.5, cy: 0.5, scale: 1, rotateDeg: 0 };
 /** §3's defaults for a mode. */
 export function modeDefaults(mode: Mode): { pins: number; res: number; minSkip: number; maxLines: number } {
   return mode === "mono" ? { pins: 256, res: 400, minSkip: 20, maxLines: 4000 } : { pins: 200, res: 240, minSkip: 15, maxLines: 1500 };
+}
+
+/** The budget a thread starts with on a piece with pins inside the picture, in either mode (D-61). */
+export const INSIDE_BUDGET = 4000;
+
+/**
+ * The budget a thread starts with: §3's for the mode, and INSIDE_BUDGET where that is more on a piece with pins
+ * inside the picture. Such a piece takes about twice the steps of one on the frame alone, and a thread whose
+ * budget runs out there leaves its part of the picture undone: no other colour draws it (greedy.ts).
+ */
+export const defaultBudget = (mode: Mode, inside: boolean): number => (inside ? Math.max(INSIDE_BUDGET, modeDefaults(mode).maxLines) : modeDefaults(mode).maxLines);
+
+/**
+ * The project with this many pins inside the picture. Where that turns such pins on or off, a thread whose
+ * budget is still the one a project starts with takes the other's; a budget the user has set stays.
+ */
+export function withInside(p: Project, count: number): Project {
+  const was = !!p.frame.inside, now = count > 0, from = defaultBudget(p.mode, was), to = defaultBudget(p.mode, now);
+  const threads = was === now || from === to ? p.threads : p.threads.map((th) => (th.maxLines === from ? { ...th, maxLines: to } : th));
+  return { ...p, threads, frame: { ...p.frame, inside: count } };
 }
 
 export function defaultProject(): Project {
@@ -297,11 +314,10 @@ function normalizeResult(raw: unknown, p: Project): Result | null {
     inside = list.slice() as number[];
   }
   const N = F + inside.length / 2;
-  // With pins inside, the pairs the generator may join there, asked pair by pair (D-60); on a rectangle, the
-  // table of the pairs it may join (frame.ts); on a circle the minimum skip, as always.
-  const may = inside.length
-    ? joinRule({ pins: F, minSkip: p.generator.minSkip, ...frameSpec(p.frame), inside, diameterMm: p.frame.diameterMm, threadWidthMm: p.thread.widthMm, pinDiameterMm: p.frame.pinDiameterMm }, STORED_SLACK)
-    : null;
+  // With pins inside, the pairs the generator may join there (D-60: the frame's own between two of its pins,
+  // any pair with a pin inside); on a rectangle, the table of the pairs it may join (frame.ts); on a circle the
+  // minimum skip, as always.
+  const may = inside.length ? joinRule({ pins: F, minSkip: p.generator.minSkip, ...frameSpec(p.frame), inside }) : null;
   const ok = !may && p.frame.shape === "rect" ? allowedPairs({ pins: F, minSkip: p.generator.minSkip, ...frameSpec(p.frame) }) : null;
   for (const s of r.sequences) {
     if (!Array.isArray(s) || s.length === 1) return null;

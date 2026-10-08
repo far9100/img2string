@@ -3,7 +3,7 @@
 import type { FrameOptions } from "./frame.ts";
 import { autoPalette, type GamutSummary } from "./gamut.ts";
 import { linearToSrgb8 } from "./image.ts";
-import { maxMinSkip, maxResolution, modeDefaults, type Mode, type Project, type ThreadSpec } from "./project.ts";
+import { defaultBudget, maxMinSkip, maxResolution, modeDefaults, type Mode, type Project, type ThreadSpec } from "./project.ts";
 import { hexToLinear, oklab, type Options, type RGB } from "./stringart.ts";
 
 export interface Preset {
@@ -36,7 +36,7 @@ export function presetOf(p: Project): string {
  * mode (pins, resolution, minimum skip, budgets); within a mode the user's frame settings stay. */
 export function applyPreset(p: Project, preset: Preset, name: (key: string) => string): Project {
   const d = modeDefaults(preset.mode), switched = preset.mode !== p.mode;
-  const budget = switched ? d.maxLines : (p.threads[0]?.maxLines ?? d.maxLines);
+  const budget = switched ? defaultBudget(preset.mode, !!p.frame.inside) : (p.threads[0]?.maxLines ?? d.maxLines);
   const threads: ThreadSpec[] = preset.threads.map((t) => ({ name: name(`thread.${t.name}`), hex: t.hex, maxLines: budget }));
   const frame = switched ? { ...p.frame, pins: d.pins } : p.frame;
   const res = switched ? Math.min(d.res, Math.max(64, maxResolution(frame.diameterMm, p.thread.widthMm))) : p.generator.res;
